@@ -14,7 +14,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Progress tracking
+STEP=0
+TOTAL_STEPS=11
 
 # Configuration variables
 ASPERA_VERSION="4.4.7.2224"
@@ -25,21 +32,29 @@ ASPERA_DATA_DIR="/aspera/data"
 ASPERA_CACHE_DIR="/aspera/cache"
 ASPERA_LOG_DIR="/aspera/logs"
 
-# Function to print colored messages
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "  ${CYAN}→${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "  ${GREEN}✔${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "  ${YELLOW}⚠${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "  ${RED}✖${NC} $1"
+}
+
+print_step() {
+    STEP=$((STEP + 1))
+    echo ""
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}${BLUE}[${STEP}/${TOTAL_STEPS}]${NC}  ${BOLD}$1${NC}"
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
 # Function for beautiful spinner animation
@@ -140,7 +155,7 @@ update_system() {
 # Function to install dependencies
 install_dependencies() {
     print_info "Installing required dependencies..."
-    
+
     case "$PKG_MANAGER" in
         apt)
             apt-get install -y -qq \
@@ -152,7 +167,7 @@ install_dependencies() {
                 iptables \
                 rsync \
                 openssl \
-                awscli
+                python3
             ;;
         yum|dnf)
             $PKG_MANAGER install -y -q \
@@ -164,11 +179,50 @@ install_dependencies() {
                 iptables \
                 rsync \
                 openssl \
-                awscli
+                python3
             ;;
     esac
-    
+
+    # awscli is installed separately because the distro-provided package was
+    # removed from Ubuntu 24.04+ and is unavailable in default RHEL repos.
+    install_awscli || print_warning "awscli could not be installed up-front; COS features may be unavailable."
+
     print_success "Dependencies installed successfully"
+}
+
+# Robust awscli installer — tries multiple methods, returns 0 if `aws` is on PATH
+install_awscli() {
+    if command -v aws &> /dev/null; then
+        return 0
+    fi
+
+    # 1. Native package manager (works on older Ubuntu/RHEL where pkg still exists)
+    case "${PKG_MANAGER:-}" in
+        apt)     apt-get install -y -qq awscli >/dev/null 2>&1 || true ;;
+        yum|dnf) $PKG_MANAGER install -y -q awscli >/dev/null 2>&1 || true ;;
+    esac
+    command -v aws &> /dev/null && return 0
+
+    # 2. pip3 with --break-system-packages (Ubuntu 24.04+ / PEP 668)
+    if command -v pip3 &> /dev/null; then
+        pip3 install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+    command -v aws &> /dev/null && return 0
+
+    # 3. pip with --break-system-packages
+    if command -v pip &> /dev/null; then
+        pip install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+    command -v aws &> /dev/null && return 0
+
+    # 4. Bootstrap pip via ensurepip, then install
+    if command -v python3 &> /dev/null; then
+        python3 -m ensurepip >/dev/null 2>&1 || true
+        python3 -m pip install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+    command -v aws &> /dev/null && return 0
+
+    return 1
 }
 
 # Function to download Aspera HSTS
@@ -189,21 +243,12 @@ download_aspera() {
     fi
     
     # Try custom COS bucket if variables are set
-    if [ -n "${ASPERA_COS_BIN_URL:-}" ] || ([ -n "${COS_ACCESS_KEY:-}" ] && [ -n "${COS_ENDPOINT:-}" ]); then
+    if [ -n "${ASPERA_COS_BIN_URL:-}" ] || ([ -n "${COS_ACCESS_KEY:-}" ] && [ -n "${COS_ENDPOINT:-}" ] && [ -n "${COS_BUCKET:-}" ]); then
         print_info "COS configuration detected. Attempting to download from internal storage..."
-        
-        # Ensure AWS CLI is installed
-        if ! command -v aws &> /dev/null; then
-            print_warning "awscli not found. Installing temporarily to download package..."
-            if [ "$PKG_MANAGER" = "apt" ]; then
-                apt-get install -y -qq awscli
-            else
-                yum install -y awscli
-            fi
-        fi
-        
-        # Setup temp credentials if necessary
-        if [ -n "${COS_ACCESS_KEY:-}" ]; then
+
+        if ! install_awscli; then
+            print_error "awscli could not be installed; cannot download from COS."
+        elif [ -n "${COS_ACCESS_KEY:-}" ]; then
             mkdir -p /root/.aws
             cat > /root/.aws/credentials << EOF
 [default]
@@ -216,13 +261,15 @@ s3 =
     endpoint_url = ${COS_ENDPOINT}
     signature_version = s3v4
 EOF
-            
+
             local S3_TARGET="s3://${COS_BUCKET}/binaries/${ASPERA_PACKAGE}"
             if [ -n "${ASPERA_COS_BIN_URL:-}" ]; then
                 S3_TARGET="${ASPERA_COS_BIN_URL}"
             fi
-            
-            if execute_with_spinner "Downloading from ${S3_TARGET}" aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
+
+            # Pass --endpoint-url explicitly: the s3= config block is not honoured by `aws s3 cp`.
+            if execute_with_spinner "Downloading from ${S3_TARGET}" \
+                aws s3 cp --endpoint-url "${COS_ENDPOINT}" "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
                 print_success "Aspera HSTS downloaded successfully from internal COS"
                 return 0
             else
@@ -452,7 +499,7 @@ EOF
     # Set proper ownership and permissions
     chown -R aspera:aspera "${ASPERA_INSTALL_DIR}/etc"
     chmod 755 "${ASPERA_INSTALL_DIR}/etc"
-    chmod 644 "${CONF_FILE}"
+    chmod 600 "${CONF_FILE}"
     
     print_success "aspera.conf created successfully"
     print_info "Encryption token: ${TOKEN}"
@@ -560,9 +607,14 @@ EOF
     local UPLOAD_SUCCESS=false
     local UPLOAD_OUTPUT=""
 
+    if ! install_awscli; then
+        print_warning "awscli not available. Skipping SSH key upload to COS."
+        return 0
+    fi
+
     while [ "$UPLOAD_SUCCESS" = "false" ]; do
         print_info "Uploading SSH key to IBM Cloud Object Storage..."
-        if UPLOAD_OUTPUT=$(aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1); then
+        if UPLOAD_OUTPUT=$(aws s3 cp --endpoint-url "${COS_ENDPOINT}" "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1); then
             print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
             UPLOAD_SUCCESS=true
         else
@@ -604,32 +656,37 @@ EOF
     chmod 600 /opt/aspera/etc/cos_credentials.sh
 }
 
-# Function to display summary
 display_summary() {
     echo ""
-    echo "=========================================="
-    echo "  IBM Aspera HSTS Installation Complete"
-    echo "=========================================="
-    echo ""
-    echo "Installation Directory: ${ASPERA_INSTALL_DIR}"
-    echo "Data Directory: ${ASPERA_DATA_DIR}"
-    echo "Cache Directory: ${ASPERA_CACHE_DIR}"
-    echo "Log Directory: ${ASPERA_LOG_DIR}"
-    echo ""
-    echo "Configuration File: ${ASPERA_INSTALL_DIR}/etc/aspera.conf"
-    echo ""
-    echo "Service Status:"
-    systemctl status asperanoded --no-pager | head -5
-    echo ""
-    echo "Next Steps:"
-    echo "1. Configure license: ${ASPERA_INSTALL_DIR}/bin/asconfigurator -x \"set_license_key;<YOUR_LICENSE_KEY>\""
-    echo "2. Create transfer users: useradd -m -d ${ASPERA_DATA_DIR}/username username"
-    echo "3. Test transfers from client"
-    echo ""
-    echo "Useful Commands:"
-    echo "- Check service: systemctl status asperanoded"
-    echo "- View logs: journalctl -u asperanoded -f"
-    echo "- Check config: ${ASPERA_INSTALL_DIR}/bin/asnodeadmin -c"
+    echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}  ║${NC}  ${BOLD}${GREEN}✔  Installation Complete${NC}                               ${BOLD}${GREEN}║${NC}"
+    echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Install dir${NC}  ${ASPERA_INSTALL_DIR}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Data dir${NC}     ${ASPERA_DATA_DIR}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Cache dir${NC}    ${ASPERA_CACHE_DIR}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Log dir${NC}      ${ASPERA_LOG_DIR}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Config${NC}       ${ASPERA_INSTALL_DIR}/etc/aspera.conf"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${BOLD}Service status${NC}"
+    systemctl status asperanoded --no-pager | head -3 | \
+        while IFS= read -r line; do echo -e "${GREEN}  ║${NC}  ${DIM}${line}${NC}"; done
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${BOLD}Next steps${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}1.${NC} Configure license"
+    echo -e "${GREEN}  ║${NC}     ${DIM}${ASPERA_INSTALL_DIR}/bin/asconfigurator -x \"set_license_key;<KEY>\"${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}2.${NC} Create transfer users"
+    echo -e "${GREEN}  ║${NC}     ${DIM}useradd -m -d ${ASPERA_DATA_DIR}/username username${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}3.${NC} Export config for the client"
+    echo -e "${GREEN}  ║${NC}     ${DIM}./aspera-export-config.sh${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${BOLD}Useful commands${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}systemctl status asperanoded${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}journalctl -u asperanoded -f${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}${ASPERA_INSTALL_DIR}/bin/asnodeadmin -c${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${BOLD}${GREEN}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
@@ -700,11 +757,13 @@ prompt_cos_credentials() {
             # Upfront validation of COS credentials
             print_info "Validating COS credentials against bucket s3://${COS_BUCKET_INPUT}..."
             
-            # Quick check if awscli is available for validation
-            if ! command -v aws &> /dev/null; then
-                execute_with_spinner "Installing temporary awscli for validation" bash -c 'apt-get install -y -qq awscli >/dev/null 2>&1 || yum install -y -q awscli >/dev/null 2>&1 || true'
+            # Ensure awscli is available
+            if ! install_awscli; then
+                print_warning "AWS CLI could not be installed. Skipping COS credential validation."
+                print_warning "Credentials will be used as-is. Ensure they are correct before proceeding."
+                return
             fi
-            
+
             mkdir -p /root/.aws
             cat > /root/.aws/credentials << EOF
 [default]
@@ -718,10 +777,10 @@ s3 =
     signature_version = s3v4
 EOF
             local VALIDATION_OUTPUT
-            
+
             # Using standard execution without spinner because subshells inside command substitution block the animation
             print_info "Authenticating and querying s3://${COS_BUCKET_INPUT}..."
-            if VALIDATION_OUTPUT=$(aws s3 ls "s3://${COS_BUCKET_INPUT}" 2>&1); then
+            if VALIDATION_OUTPUT=$(aws s3 ls --endpoint-url "${COS_ENDPOINT_INPUT}" "s3://${COS_BUCKET_INPUT}" 2>&1); then
                 print_success "COS credentials validated successfully!"
                 print_success "COS credentials configured for this installation session."
             else
@@ -756,8 +815,8 @@ EOF
 
 # Main execution
 
-# Splash Screen
 print_splash() {
+    echo ""
     echo -e "${BLUE}"
     echo "  ___ ____  __  __   _____                      _     _          _         "
     echo " |_ _| __ )|  \/  | | ____|_  ___ __   ___ _ __| |_  | |    __ _| |__  ___ "
@@ -767,29 +826,54 @@ print_splash() {
     echo "                               |_|                                         "
     echo -e "${NC}"
     echo ""
+    echo -e "${BOLD}${BLUE}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${BOLD}IBM Aspera HSTS Server${NC}  ${DIM}·${NC}  Automated Installer     ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${DIM}Ubuntu / RHEL / CentOS / Fedora     v 1.0.0${NC}          ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
 }
 
 main() {
     print_splash
-    print_info "Starting IBM Aspera HSTS installation..."
-    echo ""
-    
+
+    print_step "Pre-flight Checks"
     check_root
     detect_os
+
+    print_step "COS Configuration"
     prompt_cos_credentials
+
+    print_step "Update System"
     update_system
+
+    print_step "Install Dependencies"
     install_dependencies
+
+    print_step "Download Aspera HSTS"
     download_aspera
+
+    print_step "Install Aspera HSTS"
     install_aspera
+
+    print_step "Create Directories"
     create_directories
+
+    print_step "Configure Firewall"
     configure_firewall
+
+    print_step "Create Configuration"
     create_aspera_conf
+
+    print_step "Start Services"
     start_services
+
+    print_step "Verify & Finalize"
     verify_installation
     configure_cos_and_upload_key
+
     display_summary
-    
-    print_success "Installation completed successfully!"
 }
 
 # Run main function

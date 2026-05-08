@@ -14,7 +14,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Progress tracking
+STEP=0
+TOTAL_STEPS=8
 
 # Configuration
 CONFIG_FILE="${1:-}"
@@ -23,21 +30,29 @@ SSH_KEY_PATH="$HOME/.ssh/aspera_transfer_key"
 CLIENT_CONFIG_DIR="$HOME/.aspera-client"
 CLIENT_CONFIG_FILE="$CLIENT_CONFIG_DIR/server-config.json"
 
-# Function to print colored messages
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "  ${CYAN}→${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "  ${GREEN}✔${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "  ${YELLOW}⚠${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "  ${RED}✖${NC} $1"
+}
+
+print_step() {
+    STEP=$((STEP + 1))
+    echo ""
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}${BLUE}[${STEP}/${TOTAL_STEPS}]${NC}  ${BOLD}$1${NC}"
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
 # Function to check if running as regular user
@@ -85,13 +100,15 @@ EOF
         CONFIG_FILE="/tmp/aspera-server-config.json"
     fi
 
-    # Download the config file
-    if aws s3 cp "s3://${COS_BUCKET}/config/aspera-server-config.json" "$CONFIG_FILE"; then
+    # Pass --endpoint-url explicitly: the s3= config block is not honoured by `aws s3 cp/rm`.
+    if aws s3 cp --endpoint-url "${COS_ENDPOINT}" \
+            "s3://${COS_BUCKET}/config/aspera-server-config.json" "$CONFIG_FILE"; then
         print_success "Configuration fetched successfully from s3://${COS_BUCKET}/config/aspera-server-config.json!"
-        
+
         # Security cleanup
         print_info "Removing config file from COS for security..."
-        aws s3 rm "s3://${COS_BUCKET}/config/aspera-server-config.json" || print_warning "Failed to remove config from COS."
+        aws s3 rm --endpoint-url "${COS_ENDPOINT}" \
+            "s3://${COS_BUCKET}/config/aspera-server-config.json" || print_warning "Failed to remove config from COS."
         rm -rf ~/.aws
     else
         print_warning "Failed to fetch configuration from COS."
@@ -280,10 +297,10 @@ copy_ssh_key_to_server() {
         3)
             print_info "Manual copy instructions:"
             echo ""
-            echo "1. Copy this public key:"
-            echo "----------------------------------------"
+            echo -e "  ${BOLD}1. Copy this public key${NC}"
+            echo -e "${DIM}  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${NC}"
             cat "${SSH_KEY_PATH}.pub"
-            echo "----------------------------------------"
+            echo -e "${DIM}  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${NC}"
             echo ""
             echo "2. On the SERVER, run as root or with sudo:"
             echo "   mkdir -p /home/${TRANSFER_USER}/.ssh"
@@ -433,8 +450,9 @@ aspera-ssh() {
 
 # Alias for listing remote files
 aspera-ls() {
-    local PATH="${1:-$TRANSFER_HOME}"
-    ssh -i $SSH_KEY -p $SSH_PORT ${TRANSFER_USER}@${SERVER_IP} "ls -lh $PATH"
+    # Use REMOTE_PATH (not PATH!) — assigning to $PATH would break command lookup
+    local REMOTE_PATH="${1:-$TRANSFER_HOME}"
+    ssh -i "$SSH_KEY" -p "$SSH_PORT" "${TRANSFER_USER}@${SERVER_IP}" "ls -lh '$REMOTE_PATH'"
 }
 
 # Show configuration
@@ -468,71 +486,88 @@ EOF
     print_info "To use aliases now, run: source ~/.aspera-client/aspera-aliases.sh"
 }
 
-# Function to display summary
 display_summary() {
     echo ""
-    echo "=========================================="
-    echo "  Aspera Client Configuration Complete"
-    echo "=========================================="
-    echo ""
-    echo "Server: $SERVER_HOSTNAME ($SERVER_PRIVATE_IP)"
-    echo "Transfer User: $TRANSFER_USER"
-    echo "SSH Key: $SSH_KEY_PATH"
-    echo "Configuration: $CLIENT_CONFIG_DIR"
-    echo ""
-    echo "Quick Start Commands:"
-    echo ""
-    echo "1. Load aliases:"
-    echo "   source ~/.aspera-client/aspera-aliases.sh"
-    echo ""
-    echo "2. Upload a file:"
-    echo "   aspera-upload /path/to/file"
-    echo ""
-    echo "3. Download a file:"
-    echo "   aspera-download /aspera/data/transfer-user/file"
-    echo ""
-    echo "4. SSH to server:"
-    echo "   aspera-ssh"
-    echo ""
-    echo "5. Run validation:"
-    echo "   ./aspera-validate.sh"
+    echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}  ║${NC}  ${BOLD}${GREEN}✔  Configuration Complete${NC}                              ${BOLD}${GREEN}║${NC}"
+    echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Server${NC}       $SERVER_HOSTNAME ($SERVER_PRIVATE_IP)"
+    echo -e "${GREEN}  ║${NC}  ${DIM}User${NC}         $TRANSFER_USER"
+    echo -e "${GREEN}  ║${NC}  ${DIM}SSH Key${NC}      $SSH_KEY_PATH"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Config dir${NC}   $CLIENT_CONFIG_DIR"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${BOLD}Quick start${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}1.${NC} Load aliases"
+    echo -e "${GREEN}  ║${NC}     ${DIM}source ~/.aspera-client/aspera-aliases.sh${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}2.${NC} Upload a file"
+    echo -e "${GREEN}  ║${NC}     ${DIM}aspera-upload /path/to/file${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}3.${NC} Download a file"
+    echo -e "${GREEN}  ║${NC}     ${DIM}aspera-download /aspera/data/transfer-user/file${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}4.${NC} SSH to server"
+    echo -e "${GREEN}  ║${NC}     ${DIM}aspera-ssh${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}5.${NC} Run end-to-end validation"
+    echo -e "${GREEN}  ║${NC}     ${DIM}./aspera-validate.sh${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${BOLD}${GREEN}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 # Main execution
 
-# Splash Screen
 print_splash() {
-    echo -e "${BLUE}"
-    echo "  ___ ____  __  __   _____                      _     _          _         "
-    echo " |_ _| __ )|  \/  | | ____|_  ___ __   ___ _ __| |_  | |    __ _| |__  ___ "
-    echo "  | ||  _ \| |\/| | |  _| \ \/ / '_ \ / _ \ '__| __| | |   / _\` | '_ \/ __|"
-    echo "  | || |_) | |  | | | |___ >  <| |_) |  __/ |  | |_  | |__| (_| | |_) \__ \\"
-    echo " |___|____/|_|  |_| |_____/_/\_\ .__/ \___|_|   \__| |_____\__,_|_.__/|___/"
-    echo "                               |_|                                         "
-    echo -e "${NC}"
+    echo ""
+    printf "${BOLD}${BLUE}"
+    echo " ______________  ___  _____                     _     _           _         "
+    echo "|_   _| ___ \\  \\/  | |  ___|                   | |   | |         | |        "
+    echo "  | | | |_/ / .  . | | |____  ___ __   ___ _ __| |_  | |     __ _| |__  ___ "
+    echo "  | | | ___ \\ |\\/| | |  __\\ \\/ / '_ \\ / _ \\ '__| __| | |    / _\` | '_ \\/ __|"
+    echo " _| |_| |_/ / |  | | | |___>  <| |_) |  __/ |  | |_  | |___| (_| | |_) \\__ \\"
+    echo " \\___/\\____/\\_|  |_/ \\____/_/\\_\\ .__/ \\___|_|   \\__| \\_____/\\__,_|_.__/|___/"
+    echo "                               | |                                          "
+    printf "                               |_|                                          \n${NC}"
+    echo ""
+    echo -e "${BOLD}${BLUE}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${BOLD}IBM Aspera Connect Client${NC}  ${DIM}·${NC}  Client Configurator   ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${DIM}Ubuntu / RHEL / CentOS / Fedora     v 1.0.0${NC}          ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 main() {
     print_splash
-    print_info "Starting Aspera client configuration..."
-    echo ""
-    
+
+    print_step "Pre-flight Checks"
     check_user
+
+    print_step "Fetch & Validate Config"
     fetch_config_from_cos
     validate_config_file
+
+    print_step "Check Aspera Client"
     check_aspera_client
+
+    print_step "Parse Server Config"
     parse_server_config
+
+    print_step "Network Connectivity"
     test_connectivity
+
+    print_step "SSH Key Setup"
     setup_ssh_key
     copy_ssh_key_to_server
     test_ssh_auth
+
+    print_step "Create Client Config"
     create_client_config
+
+    print_step "Shell Aliases"
     create_aliases
+
     display_summary
-    
-    print_success "Configuration completed successfully!"
 }
 
 # Run main function

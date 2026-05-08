@@ -15,7 +15,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Progress tracking
+STEP=0
+TOTAL_STEPS=7
 
 # Configuration
 CLIENT_CONFIG_DIR="$HOME/.aspera-client"
@@ -27,27 +33,32 @@ JSON_REPORT_FILE="$HOME/aspera-validation-report-$(date +%Y%m%d_%H%M%S).json"
 # Test results
 TESTS_PASSED=0
 TESTS_FAILED=0
+TESTS_WARNED=0
 TESTS_TOTAL=0
 
-# Function to print colored messages
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "  ${CYAN}→${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[✓ PASS]${NC} $1"
+    echo -e "  ${GREEN}✔${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[⚠ WARN]${NC} $1"
+    echo -e "  ${YELLOW}⚠${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[✗ FAIL]${NC} $1"
+    echo -e "  ${RED}✖${NC} $1"
 }
 
-print_test() {
-    echo -e "${CYAN}[TEST]${NC} $1"
+print_step() {
+    STEP=$((STEP + 1))
+    echo ""
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}${BLUE}[${STEP}/${TOTAL_STEPS}]${NC}  ${BOLD}$1${NC}"
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
 # Function to record test result
@@ -57,15 +68,22 @@ record_test() {
     local MESSAGE="${3:-}"
     
     TESTS_TOTAL=$((TESTS_TOTAL + 1))
-    
-    if [ "$RESULT" = "PASS" ]; then
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-        print_success "$TEST_NAME"
-    else
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-        print_error "$TEST_NAME: $MESSAGE"
-    fi
-    
+
+    case "$RESULT" in
+        PASS)
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            print_success "$TEST_NAME"
+            ;;
+        WARN)
+            TESTS_WARNED=$((TESTS_WARNED + 1))
+            print_warning "$TEST_NAME: $MESSAGE"
+            ;;
+        *)
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            print_error "$TEST_NAME: $MESSAGE"
+            ;;
+    esac
+
     # Log to report file
     echo "[$RESULT] $TEST_NAME: $MESSAGE" >> "$REPORT_FILE"
 }
@@ -101,7 +119,7 @@ cleanup() {
 
 # Test 1: Network Connectivity
 test_network_connectivity() {
-    print_test "1. Network Connectivity Tests"
+    print_step "Network Connectivity"
     echo "" >> "$REPORT_FILE"
     echo "=== Network Connectivity Tests ===" >> "$REPORT_FILE"
     
@@ -138,7 +156,7 @@ test_network_connectivity() {
 
 # Test 2: SSH Authentication
 test_ssh_authentication() {
-    print_test "2. SSH Authentication Tests"
+    print_step "SSH Authentication"
     echo "" >> "$REPORT_FILE"
     echo "=== SSH Authentication Tests ===" >> "$REPORT_FILE"
     
@@ -177,7 +195,7 @@ test_ssh_authentication() {
 
 # Test 3: Aspera Client
 test_aspera_client() {
-    print_test "3. Aspera Client Tests"
+    print_step "Aspera Client"
     echo "" >> "$REPORT_FILE"
     echo "=== Aspera Client Tests ===" >> "$REPORT_FILE"
     
@@ -199,7 +217,7 @@ test_aspera_client() {
 
 # Test 4: File Transfer - Upload
 test_file_upload() {
-    print_test "4. File Transfer Tests - Upload"
+    print_step "File Transfer  —  Upload"
     echo "" >> "$REPORT_FILE"
     echo "=== File Transfer Tests - Upload ===" >> "$REPORT_FILE"
     
@@ -248,7 +266,7 @@ test_file_upload() {
 
 # Test 5: File Transfer - Download
 test_file_download() {
-    print_test "5. File Transfer Tests - Download"
+    print_step "File Transfer  —  Download"
     echo "" >> "$REPORT_FILE"
     echo "=== File Transfer Tests - Download ===" >> "$REPORT_FILE"
     
@@ -286,7 +304,7 @@ test_file_download() {
 
 # Test 6: Performance Benchmarks
 test_performance() {
-    print_test "6. Performance Benchmark Tests"
+    print_step "Performance Benchmarks"
     echo "" >> "$REPORT_FILE"
     echo "=== Performance Benchmark Tests ===" >> "$REPORT_FILE"
     
@@ -315,7 +333,7 @@ test_performance() {
 
 # Test 7: Server Status
 test_server_status() {
-    print_test "7. Server Status Tests"
+    print_step "Server Status"
     echo "" >> "$REPORT_FILE"
     echo "=== Server Status Tests ===" >> "$REPORT_FILE"
     
@@ -352,6 +370,7 @@ generate_json_report() {
     "summary": {
         "total_tests": $TESTS_TOTAL,
         "passed": $TESTS_PASSED,
+        "warned": $TESTS_WARNED,
         "failed": $TESTS_FAILED,
         "success_rate": $(echo "scale=2; $TESTS_PASSED * 100 / $TESTS_TOTAL" | bc)
     },
@@ -360,58 +379,68 @@ generate_json_report() {
 EOF
 }
 
-# Function to display final report
 display_report() {
+    local SUCCESS_RATE
+    SUCCESS_RATE=$(echo "scale=1; $TESTS_PASSED * 100 / $TESTS_TOTAL" | bc)
+
     echo ""
-    echo "=========================================="
-    echo "  Aspera Validation Report"
-    echo "=========================================="
-    echo ""
-    echo "Server: $SERVER_HOSTNAME ($SERVER_IP)"
-    echo "Date: $(date)"
-    echo ""
-    echo "Test Results:"
-    echo "  Total Tests: $TESTS_TOTAL"
-    echo "  Passed: $TESTS_PASSED"
-    echo "  Failed: $TESTS_FAILED"
-    echo "  Success Rate: $(echo "scale=2; $TESTS_PASSED * 100 / $TESTS_TOTAL" | bc)%"
-    echo ""
-    
-    if [ $TESTS_FAILED -eq 0 ]; then
-        print_success "All tests passed! Aspera setup is fully functional."
+    if [ "$TESTS_FAILED" -eq 0 ]; then
+        echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}${GREEN}  ║${NC}  ${BOLD}${GREEN}✔  All Tests Passed${NC}                                   ${BOLD}${GREEN}║${NC}"
+        echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════╣${NC}"
+        local RESULT_COLOR="${GREEN}"
     else
-        print_error "$TESTS_FAILED test(s) failed. Review the report for details."
+        echo -e "${BOLD}${RED}  ╔══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}${RED}  ║${NC}  ${BOLD}${RED}✖  ${TESTS_FAILED} Test(s) Failed${NC}                                  ${BOLD}${RED}║${NC}"
+        echo -e "${BOLD}${RED}  ╠══════════════════════════════════════════════════════╣${NC}"
+        local RESULT_COLOR="${RED}"
     fi
-    
-    echo ""
-    echo "Detailed Reports:"
-    echo "  Text: $REPORT_FILE"
-    echo "  JSON: $JSON_REPORT_FILE"
+    echo -e "${RESULT_COLOR}  ║${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${DIM}Server${NC}    $SERVER_HOSTNAME ($SERVER_IP)"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${DIM}Date${NC}      $(date)"
+    echo -e "${RESULT_COLOR}  ║${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${BOLD}Results${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${CYAN}Total${NC}    $TESTS_TOTAL"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${GREEN}Passed${NC}   $TESTS_PASSED"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${YELLOW}Warned${NC}   $TESTS_WARNED"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${RED}Failed${NC}   $TESTS_FAILED"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${CYAN}Rate${NC}     ${SUCCESS_RATE}%"
+    echo -e "${RESULT_COLOR}  ║${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${BOLD}Reports${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${DIM}Text  $REPORT_FILE${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}  ${DIM}JSON  $JSON_REPORT_FILE${NC}"
+    echo -e "${RESULT_COLOR}  ║${NC}"
+    echo -e "${BOLD}${RESULT_COLOR}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 # Main execution
 
-# Splash Screen
 print_splash() {
-    echo -e "${BLUE}"
-    echo "  ___ ____  __  __   _____                      _     _          _         "
-    echo " |_ _| __ )|  \/  | | ____|_  ___ __   ___ _ __| |_  | |    __ _| |__  ___ "
-    echo "  | ||  _ \| |\/| | |  _| \ \/ / '_ \ / _ \ '__| __| | |   / _\` | '_ \/ __|"
-    echo "  | || |_) | |  | | | |___ >  <| |_) |  __/ |  | |_  | |__| (_| | |_) \__ \\"
-    echo " |___|____/|_|  |_| |_____/_/\_\ .__/ \___|_|   \__| |_____\__,_|_.__/|___/"
-    echo "                               |_|                                         "
-    echo -e "${NC}"
+    echo ""
+    printf "${BOLD}${BLUE}"
+    echo " ______________  ___  _____                     _     _           _         "
+    echo "|_   _| ___ \\  \\/  | |  ___|                   | |   | |         | |        "
+    echo "  | | | |_/ / .  . | | |____  ___ __   ___ _ __| |_  | |     __ _| |__  ___ "
+    echo "  | | | ___ \\ |\\/| | |  __\\ \\/ / '_ \\ / _ \\ '__| __| | |    / _\` | '_ \\/ __|"
+    echo " _| |_| |_/ / |  | | | |___>  <| |_) |  __/ |  | |_  | |___| (_| | |_) \\__ \\"
+    echo " \\___/\\____/\\_|  |_/ \\____/_/\\_\\ .__/ \\___|_|   \\__| \\_____/\\__,_|_.__/|___/"
+    echo "                               | |                                          "
+    printf "                               |_|                                          \n${NC}"
+    echo ""
+    echo -e "${BOLD}${BLUE}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${BOLD}IBM Aspera${NC}  ${DIM}·${NC}  End-to-End Validation Suite          ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${DIM}Ubuntu / RHEL / CentOS / Fedora     v 1.0.0${NC}          ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 main() {
     print_splash
-    echo "=========================================="
-    echo "  IBM Aspera End-to-End Validation"
-    echo "=========================================="
-    echo ""
-    
+
     # Initialize report
     echo "Aspera Validation Report" > "$REPORT_FILE"
     echo "Generated: $(date)" >> "$REPORT_FILE"

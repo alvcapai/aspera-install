@@ -14,7 +14,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Progress tracking
+STEP=0
+TOTAL_STEPS=8
 
 # Configuration variables
 ASPERA_VERSION="4.2.19.956"
@@ -22,21 +29,29 @@ ASPERA_PACKAGE="ibm-aspera-connect_${ASPERA_VERSION}-HEAD_linux_x86_64.tar.gz"
 ASPERA_DOWNLOAD_URL="https://d3gcli72yxqn2z.cloudfront.net/downloads/connect/latest/bin/${ASPERA_PACKAGE}"
 ASPERA_INSTALL_DIR="$HOME/.aspera/connect"
 
-# Function to print colored messages
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "  ${CYAN}→${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "  ${GREEN}✔${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "  ${YELLOW}⚠${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "  ${RED}✖${NC} $1"
+}
+
+print_step() {
+    STEP=$((STEP + 1))
+    echo ""
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}${BLUE}[${STEP}/${TOTAL_STEPS}]${NC}  ${BOLD}$1${NC}"
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
 # Function to check if running as regular user
@@ -80,13 +95,13 @@ detect_os() {
 # Function to install dependencies
 install_dependencies() {
     print_info "Installing required dependencies..."
-    
+
     # Check if sudo is available
     if ! command -v sudo &> /dev/null; then
         print_error "sudo is not available. Please install dependencies manually."
         exit 1
     fi
-    
+
     if [ "$PKG_MANAGER" = "apt" ]; then
         sudo apt-get update -qq
         sudo apt-get install -y -qq \
@@ -95,7 +110,9 @@ install_dependencies() {
             netcat-openbsd \
             openssh-client \
             rsync \
-            awscli
+            python3 \
+            bc \
+            jq
     elif [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; then
         # RHEL/CentOS/Rocky equivalents
         sudo $PKG_MANAGER install -y -q \
@@ -105,15 +122,55 @@ install_dependencies() {
             openssh-clients \
             rsync \
             tar \
-            procps-ng
-            
-        # awscli might not be in default repos for all RHEL versions, try to install
-        if ! command -v aws &> /dev/null; then
-            sudo $PKG_MANAGER install -y -q awscli || print_warning "awscli not found in default repos, COS fetch might fail."
-        fi
+            procps-ng \
+            python3 \
+            bc \
+            jq
     fi
-    
+
+    # awscli is installed separately because the distro-provided package is
+    # unavailable on Ubuntu 24.04+ and most RHEL default repos.
+    install_awscli || print_warning "awscli could not be installed; COS piggyback will be unavailable."
+
     print_success "Dependencies installed successfully"
+}
+
+# Robust awscli installer — tries multiple methods, returns 0 if `aws` is on PATH.
+# Client runs as a regular user, so we use sudo for system-level methods.
+install_awscli() {
+    if command -v aws &> /dev/null; then
+        return 0
+    fi
+
+    # 1. Native package manager
+    case "${PKG_MANAGER:-}" in
+        apt)     sudo apt-get install -y -qq awscli >/dev/null 2>&1 || true ;;
+        yum|dnf) sudo $PKG_MANAGER install -y -q awscli >/dev/null 2>&1 || true ;;
+    esac
+    command -v aws &> /dev/null && return 0
+
+    # 2. pip3 --user (no sudo needed; respects PEP 668 via --break-system-packages)
+    if command -v pip3 &> /dev/null; then
+        pip3 install --quiet --user --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+    # Add ~/.local/bin to PATH for current shell so subsequent calls find aws
+    [ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"
+    command -v aws &> /dev/null && return 0
+
+    # 3. pip --user
+    if command -v pip &> /dev/null; then
+        pip install --quiet --user --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+    command -v aws &> /dev/null && return 0
+
+    # 4. Bootstrap pip via ensurepip --user, then install
+    if command -v python3 &> /dev/null; then
+        python3 -m ensurepip --user >/dev/null 2>&1 || true
+        python3 -m pip install --quiet --user --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+    command -v aws &> /dev/null && return 0
+
+    return 1
 }
 
 # Function to download Aspera Connect
@@ -203,38 +260,40 @@ download_key_from_cos() {
     fi
 
     print_info "Downloading Aspera SSH key from IBM Cloud Object Storage..."
-    
+
     mkdir -p ~/.aws
     cat > ~/.aws/credentials << EOF
 [default]
 aws_access_key_id = ${COS_ACCESS_KEY}
 aws_secret_access_key = ${COS_SECRET_KEY}
 EOF
-
-    cat > ~/.aws/config << EOF
-[default]
-s3 =
-    endpoint_url = ${COS_ENDPOINT}
-    signature_version = s3v4
-EOF
+    chmod 600 ~/.aws/credentials
 
     mkdir -p "$HOME/.ssh"
     chmod 700 "$HOME/.ssh"
 
-    # Download the key
-    if aws s3 cp "s3://${COS_BUCKET}/keys/aspera_rsa" "$KEY_PATH"; then
+    local cos_error
+    # Pass --endpoint-url directly; the config s3= block is not honoured by aws s3 cp
+    if cos_error=$(aws s3 cp \
+            --endpoint-url "${COS_ENDPOINT}" \
+            --no-verify-ssl \
+            "s3://${COS_BUCKET}/keys/aspera_rsa" "$KEY_PATH" 2>&1); then
         chmod 600 "$KEY_PATH"
         print_success "SSH key downloaded from COS successfully!"
-        
-        # Cleanup from COS for security
+
         print_info "Removing SSH key from COS for security..."
-        aws s3 rm "s3://${COS_BUCKET}/keys/aspera_rsa" || print_warning "Failed to remove key from COS."
-        
-        # Cleanup local AWS credentials
-        rm -rf ~/.aws
+        aws s3 rm \
+            --endpoint-url "${COS_ENDPOINT}" \
+            --no-verify-ssl \
+            "s3://${COS_BUCKET}/keys/aspera_rsa" || print_warning "Failed to remove key from COS."
     else
         print_warning "Failed to download SSH key from COS. Will generate a new one."
+        print_warning "COS error: ${cos_error}"
+        rm -f "$KEY_PATH"
     fi
+
+    # Always clean up local credentials regardless of outcome
+    rm -rf ~/.aws
 }
 
 # Function to generate SSH key for transfers
@@ -260,10 +319,10 @@ generate_ssh_key() {
         
         print_success "SSH key generated: $KEY_PATH"
         echo ""
-        print_info "Public key content (copy this to server):"
-        echo "----------------------------------------"
+        echo -e "  ${BOLD}Public key${NC} ${DIM}— copy this to ~/.ssh/authorized_keys on the server${NC}"
+        echo -e "${DIM}  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${NC}"
         cat "${KEY_PATH}.pub"
-        echo "----------------------------------------"
+        echo -e "${DIM}  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${NC}"
     fi
 }
 
@@ -336,113 +395,124 @@ create_test_file() {
     fi
 }
 
-# Function to display usage examples
 display_usage() {
+    echo -e "${BOLD}  Quick Reference${NC}"
+    echo -e "${DIM}  ──────────────────────────────────────────────────────${NC}"
     echo ""
-    echo "=========================================="
-    echo "  Aspera Connect Client Usage Examples"
-    echo "=========================================="
+    echo -e "  ${CYAN}Upload${NC}"
+    echo -e "  ${DIM}ascp -P 22 -l 1000M -i ~/.ssh/aspera_transfer_key \\${NC}"
+    echo -e "  ${DIM}  /path/to/file user@server:/destination/${NC}"
     echo ""
-    echo "Basic Upload:"
-    echo "  ~/.aspera/connect/bin/ascp -P 22 -l 1000M -i ~/.ssh/aspera_transfer_key \\"
-    echo "    /path/to/file user@server:/destination/"
+    echo -e "  ${CYAN}Download${NC}"
+    echo -e "  ${DIM}ascp -P 22 -l 1000M -i ~/.ssh/aspera_transfer_key \\${NC}"
+    echo -e "  ${DIM}  user@server:/path/to/file /local/destination/${NC}"
     echo ""
-    echo "Basic Download:"
-    echo "  ~/.aspera/connect/bin/ascp -P 22 -l 1000M -i ~/.ssh/aspera_transfer_key \\"
-    echo "    user@server:/path/to/file /local/destination/"
+    echo -e "  ${CYAN}Recursive directory${NC}"
+    echo -e "  ${DIM}ascp -P 22 -l 1000M -r -i ~/.ssh/aspera_transfer_key \\${NC}"
+    echo -e "  ${DIM}  /path/to/directory user@server:/destination/${NC}"
     echo ""
-    echo "Recursive Directory Transfer:"
-    echo "  ~/.aspera/connect/bin/ascp -P 22 -l 1000M -r -i ~/.ssh/aspera_transfer_key \\"
-    echo "    /path/to/directory user@server:/destination/"
-    echo ""
-    echo "With Progress Display:"
-    echo "  ~/.aspera/connect/bin/ascp -P 22 -l 1000M -T -i ~/.ssh/aspera_transfer_key \\"
-    echo "    /path/to/file user@server:/destination/"
-    echo ""
-    echo "Common Options:"
-    echo "  -P 22          : SSH port (use 22 for standard SSH)"
-    echo "  -l 1000M       : Target transfer rate (1000 Mbps)"
-    echo "  -i <key>       : SSH private key for authentication"
-    echo "  -T             : Display throughput statistics"
-    echo "  -r             : Recursive (for directories)"
-    echo "  -k 1           : Resume interrupted transfers"
-    echo "  -v             : Verbose output for debugging"
+    echo -e "  ${BOLD}Common flags${NC}"
+    echo -e "  ${DIM}──────────────────────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}-P 22   ${NC}  SSH port"
+    echo -e "  ${CYAN}-l 1000M${NC}  Target transfer rate"
+    echo -e "  ${CYAN}-i <key>${NC}  SSH private key"
+    echo -e "  ${CYAN}-T      ${NC}  Show throughput statistics"
+    echo -e "  ${CYAN}-r      ${NC}  Recursive (directories)"
+    echo -e "  ${CYAN}-k 1    ${NC}  Resume interrupted transfers"
+    echo -e "  ${CYAN}-v      ${NC}  Verbose / debug output"
     echo ""
 }
 
-# Function to display summary
 display_summary() {
     echo ""
-    echo "=========================================="
-    echo "  Aspera Connect Client Installation Complete"
-    echo "=========================================="
-    echo ""
-    echo "Installation Directory: ${ASPERA_INSTALL_DIR}"
-    echo "Binary Location: ${ASPERA_INSTALL_DIR}/bin/ascp"
-    echo "SSH Key: $HOME/.ssh/aspera_transfer_key"
-    echo ""
-    echo "Next Steps:"
-    echo "1. Copy SSH public key to Aspera server:"
-    echo "   cat ~/.ssh/aspera_transfer_key.pub"
-    echo "   # Then add to server: ~/.ssh/authorized_keys"
-    echo ""
-    echo "2. Test connectivity to server:"
-    echo "   ping <server-ip>"
-    echo "   nc -zv <server-ip> 22"
-    echo ""
-    echo "3. Test file transfer:"
-    echo "   ~/.aspera/connect/bin/ascp -P 22 -l 1000M -i ~/.ssh/aspera_transfer_key \\"
-    echo "     /tmp/aspera-test-10mb user@server:/destination/"
-    echo ""
-    echo "4. Apply PATH changes:"
-    echo "   source ~/.bashrc  # or ~/.zshrc"
+    echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}  ║${NC}  ${BOLD}${GREEN}✔  Installation Complete${NC}                               ${BOLD}${GREEN}║${NC}"
+    echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Directory${NC}   ${ASPERA_INSTALL_DIR}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Binary${NC}      ${ASPERA_INSTALL_DIR}/bin/ascp"
+    echo -e "${GREEN}  ║${NC}  ${DIM}SSH Key${NC}     $HOME/.ssh/aspera_transfer_key"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${BOLD}Next steps${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}1.${NC} Apply PATH changes"
+    echo -e "${GREEN}  ║${NC}     ${DIM}source ~/.bashrc${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}2.${NC} Copy public key to the Aspera server"
+    echo -e "${GREEN}  ║${NC}     ${DIM}cat ~/.ssh/aspera_transfer_key.pub${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${CYAN}3.${NC} Run a test transfer"
+    echo -e "${GREEN}  ║${NC}     ${DIM}ascp -P 22 -l 1000M -i ~/.ssh/aspera_transfer_key \\${NC}"
+    echo -e "${GREEN}  ║${NC}     ${DIM}  /tmp/aspera-test-10mb user@server:/destination/${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${BOLD}${GREEN}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 # Main execution
 
-# Splash Screen
 print_splash() {
-    echo -e "${BLUE}"
-    echo "  ___ ____  __  __   _____                      _     _          _         "
-    echo " |_ _| __ )|  \/  | | ____|_  ___ __   ___ _ __| |_  | |    __ _| |__  ___ "
-    echo "  | ||  _ \| |\/| | |  _| \ \/ / '_ \ / _ \ '__| __| | |   / _\` | '_ \/ __|"
-    echo "  | || |_) | |  | | | |___ >  <| |_) |  __/ |  | |_  | |__| (_| | |_) \__ \\"
-    echo " |___|____/|_|  |_| |_____/_/\_\ .__/ \___|_|   \__| |_____\__,_|_.__/|___/"
-    echo "                               |_|                                         "
-    echo -e "${NC}"
+    echo ""
+    printf "${BOLD}${BLUE}"
+    echo " ______________  ___  _____                     _     _           _         "
+    echo "|_   _| ___ \\  \\/  | |  ___|                   | |   | |         | |        "
+    echo "  | | | |_/ / .  . | | |____  ___ __   ___ _ __| |_  | |     __ _| |__  ___ "
+    echo "  | | | ___ \\ |\\/| | |  __\\ \\/ / '_ \\ / _ \\ '__| __| | |    / _\` | '_ \\/ __|"
+    echo " _| |_| |_/ / |  | | | |___>  <| |_) |  __/ |  | |_  | |___| (_| | |_) \\__ \\"
+    echo " \\___/\\____/\\_|  |_/ \\____/_/\\_\\ .__/ \\___|_|   \\__| \\_____/\\__,_|_.__/|___/"
+    echo "                               | |                                          "
+    printf "                               |_|                                          \n${NC}"
+    echo ""
+    echo -e "${BOLD}${BLUE}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${BOLD}IBM Aspera Connect Client${NC}  ${DIM}·${NC}  Automated Installer   ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${DIM}Ubuntu / RHEL / CentOS / Fedora     v 1.0.0${NC}          ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 main() {
     print_splash
     local SERVER_IP="${1:-}"
-    
-    print_info "Starting IBM Aspera Connect Client installation..."
-    echo ""
-    
+
+    print_step "Pre-flight Checks"
     check_user
     detect_os
+
+    print_step "Install Dependencies"
     install_dependencies
+
+    print_step "Download Aspera Connect"
     download_aspera
+
+    print_step "Install Aspera Connect"
     install_aspera
+
+    print_step "Configure PATH"
     configure_path
+
+    print_step "SSH Key Setup"
     download_key_from_cos
     generate_ssh_key
+
+    print_step "Verify Installation"
     verify_installation
+
+    print_step "Create Test Assets"
     create_test_file
-    
+
     if [ -n "$SERVER_IP" ]; then
+        echo ""
+        echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+        echo -e "  ${BOLD}${BLUE}[+]${NC}  ${BOLD}Connectivity Test${NC}"
+        echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+        echo ""
         test_connectivity "$SERVER_IP"
     fi
-    
+
     display_summary
     display_usage
-    
-    print_success "Installation completed successfully!"
-    echo ""
-    print_info "To copy your SSH public key to the server, run:"
-    echo "  ssh-copy-id -i ~/.ssh/aspera_transfer_key.pub user@server"
 }
 
 # Run main function

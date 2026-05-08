@@ -14,28 +14,43 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Progress tracking
+STEP=0
+TOTAL_STEPS=4
 
 # Configuration
 OUTPUT_FILE="${1:-aspera-server-config.json}"
 ASPERA_DIR="/opt/aspera"
 ASPERA_DATA_DIR="/aspera/data"
 
-# Function to print colored messages
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "  ${CYAN}→${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "  ${GREEN}✔${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "  ${YELLOW}⚠${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "  ${RED}✖${NC} $1"
+}
+
+print_step() {
+    STEP=$((STEP + 1))
+    echo ""
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}${BLUE}[${STEP}/${TOTAL_STEPS}]${NC}  ${BOLD}$1${NC}"
+    echo -e "${BOLD}${BLUE}  ──────────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
 # Function to check if running as root
@@ -310,14 +325,26 @@ upload_config_to_cos() {
         return 0
     fi
 
-    # Ensure AWS CLI is installed
+    # Ensure AWS CLI is installed (best-effort; this script is a small utility,
+    # so we try the package manager only and skip cleanly if unavailable).
+    if ! command -v aws &> /dev/null; then
+        if command -v apt-get &> /dev/null; then
+            apt-get install -y -qq awscli >/dev/null 2>&1 || \
+            pip3 install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
+        elif command -v yum &> /dev/null || command -v dnf &> /dev/null; then
+            { command -v dnf &>/dev/null && dnf install -y -q awscli; } || \
+            { command -v yum &>/dev/null && yum install -y -q awscli; } || \
+            pip3 install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
+        fi
+    fi
+
     if ! command -v aws &> /dev/null; then
         print_warning "awscli not found. Cannot upload to COS."
         return 0
     fi
 
     print_info "Uploading configuration to IBM Cloud Object Storage..."
-    
+
     mkdir -p /root/.aws
     cat > /root/.aws/credentials << EOF
 [default]
@@ -333,8 +360,8 @@ s3 =
 EOF
 
     COS_UPLOAD_SUCCESS="false"
-    # Upload the config file
-    if aws s3 cp "$OUTPUT_FILE" "s3://${COS_BUCKET}/config/aspera-server-config.json"; then
+    # Pass --endpoint-url explicitly: the s3= config block is not honoured by `aws s3 cp`.
+    if aws s3 cp --endpoint-url "${COS_ENDPOINT}" "$OUTPUT_FILE" "s3://${COS_BUCKET}/config/aspera-server-config.json"; then
         print_success "Configuration uploaded to s3://${COS_BUCKET}/config/aspera-server-config.json successfully!"
         COS_UPLOAD_SUCCESS="true"
     else
@@ -342,85 +369,86 @@ EOF
     fi
 }
 
-# Function to display configuration summary
 display_summary() {
-    print_info "Configuration exported to: $OUTPUT_FILE"
     echo ""
-    echo "=========================================="
-    echo "  Aspera Server Configuration Summary"
-    echo "=========================================="
-    echo ""
-    
-    # Parse and display key information
+    echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}  ║${NC}  ${BOLD}${GREEN}✔  Export Complete${NC}                                     ${BOLD}${GREEN}║${NC}"
+    echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${DIM}Output file${NC}  $OUTPUT_FILE"
+    echo -e "${GREEN}  ║${NC}"
     if command -v jq &>/dev/null; then
-        echo "Server Information:"
-        jq -r '.server | "  Private IP: \(.private_ip)\n  Public IP: \(.public_ip)\n  Hostname: \(.hostname)"' "$OUTPUT_FILE"
-        echo ""
-        
-        echo "Transfer Users:"
-        jq -r '.transfer_users[] | "  - \(.username) (\(.home_dir))"' "$OUTPUT_FILE"
-        echo ""
-        
-        echo "Services:"
-        jq -r '.services | "  Aspera Node: \(.asperanoded)\n  SSH: \(.ssh)"' "$OUTPUT_FILE"
-        echo ""
+        echo -e "${GREEN}  ║${NC}  ${BOLD}Server${NC}"
+        jq -r '.server | "  \(.hostname)  \(.private_ip)  (public: \(.public_ip))"' "$OUTPUT_FILE" | \
+            while IFS= read -r line; do echo -e "${GREEN}  ║${NC}  ${DIM}${line}${NC}"; done
+        echo -e "${GREEN}  ║${NC}"
+        echo -e "${GREEN}  ║${NC}  ${BOLD}Transfer users${NC}"
+        jq -r '.transfer_users[] | "  \(.username)  →  \(.home_dir)"' "$OUTPUT_FILE" | \
+            while IFS= read -r line; do echo -e "${GREEN}  ║${NC}  ${DIM}${line}${NC}"; done
+        echo -e "${GREEN}  ║${NC}"
+        echo -e "${GREEN}  ║${NC}  ${BOLD}Services${NC}"
+        jq -r '.services | "  asperanoded: \(.asperanoded)   ssh: \(.ssh)"' "$OUTPUT_FILE" | \
+            while IFS= read -r line; do echo -e "${GREEN}  ║${NC}  ${DIM}${line}${NC}"; done
     else
-        print_warning "Install 'jq' for better JSON formatting"
-        cat "$OUTPUT_FILE"
+        print_warning "Install 'jq' for formatted output"
     fi
-    
-    echo ""
-    echo "Next Steps:"
-    
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${GREEN}  ║${NC}  ${BOLD}Next steps${NC}"
+    echo -e "${GREEN}  ║${NC}"
     if [ "${COS_UPLOAD_SUCCESS:-false}" = "true" ]; then
-        echo "1. On the client machine, export the SAME COS variables you used here:"
-        echo "   export COS_ACCESS_KEY=\"...\""
-        echo "   export COS_SECRET_KEY=\"...\""
-        echo "   export COS_ENDPOINT=\"...\""
-        echo "   export COS_BUCKET=\"...\""
-        echo ""
-        echo "2. Then run the configuration script (it will fetch the config via piggyback automatically):"
-        echo "   ./aspera-configure-client.sh"
+        echo -e "${GREEN}  ║${NC}  ${CYAN}1.${NC} On the client, set the same COS variables"
+        echo -e "${GREEN}  ║${NC}     ${DIM}export COS_ACCESS_KEY=\"...\"  COS_SECRET_KEY=\"...\"${NC}"
+        echo -e "${GREEN}  ║${NC}     ${DIM}export COS_ENDPOINT=\"...\"    COS_BUCKET=\"...\"${NC}"
+        echo -e "${GREEN}  ║${NC}  ${CYAN}2.${NC} Run the client configurator (piggyback auto-fetch)"
+        echo -e "${GREEN}  ║${NC}     ${DIM}./aspera-configure-client.sh${NC}"
     else
-        echo "1. Transfer this file to the client machine:"
-        echo "   scp $OUTPUT_FILE user@client:/tmp/"
-        echo ""
-        echo "2. On the client, run:"
-        echo "   ./aspera-configure-client.sh /tmp/$(basename "$OUTPUT_FILE")"
+        echo -e "${GREEN}  ║${NC}  ${CYAN}1.${NC} Transfer config to the client"
+        echo -e "${GREEN}  ║${NC}     ${DIM}scp $OUTPUT_FILE user@client:/tmp/${NC}"
+        echo -e "${GREEN}  ║${NC}  ${CYAN}2.${NC} Run the client configurator"
+        echo -e "${GREEN}  ║${NC}     ${DIM}./aspera-configure-client.sh /tmp/$(basename "$OUTPUT_FILE")${NC}"
     fi
+    echo -e "${GREEN}  ║${NC}"
+    echo -e "${BOLD}${GREEN}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 # Main execution
 
-# Splash Screen
 print_splash() {
-    echo -e "${BLUE}"
-    echo "  ___ ____  __  __   _____                      _     _          _         "
-    echo " |_ _| __ )|  \/  | | ____|_  ___ __   ___ _ __| |_  | |    __ _| |__  ___ "
-    echo "  | ||  _ \| |\/| | |  _| \ \/ / '_ \ / _ \ '__| __| | |   / _\` | '_ \/ __|"
-    echo "  | || |_) | |  | | | |___ >  <| |_) |  __/ |  | |_  | |__| (_| | |_) \__ \\"
-    echo " |___|____/|_|  |_| |_____/_/\_\ .__/ \___|_|   \__| |_____\__,_|_.__/|___/"
-    echo "                               |_|                                         "
-    echo -e "${NC}"
+    echo ""
+    printf "${BOLD}${BLUE}"
+    echo " ______________  ___  _____                     _     _           _         "
+    echo "|_   _| ___ \\  \\/  | |  ___|                   | |   | |         | |        "
+    echo "  | | | |_/ / .  . | | |____  ___ __   ___ _ __| |_  | |     __ _| |__  ___ "
+    echo "  | | | ___ \\ |\\/| | |  __\\ \\/ / '_ \\ / _ \\ '__| __| | |    / _\` | '_ \\/ __|"
+    echo " _| |_| |_/ / |  | | | |___>  <| |_) |  __/ |  | |_  | |___| (_| | |_) \\__ \\"
+    echo " \\___/\\____/\\_|  |_/ \\____/_/\\_\\ .__/ \\___|_|   \\__| \\_____/\\__,_|_.__/|___/"
+    echo "                               | |                                          "
+    printf "                               |_|                                          \n${NC}"
+    echo ""
+    echo -e "${BOLD}${BLUE}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${BOLD}IBM Aspera Server${NC}  ${DIM}·${NC}  Configuration Export            ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}   ${DIM}Ubuntu / RHEL / CentOS / Fedora     v 1.0.0${NC}          ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ║${NC}                                                      ${BOLD}${BLUE}║${NC}"
+    echo -e "${BOLD}${BLUE}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 main() {
     print_splash
-    print_info "Starting Aspera server configuration export..."
-    echo ""
-    
+
+    print_step "Pre-flight Checks"
     check_root
     check_aspera_installed
-    
-    print_info "Collecting server information..."
+
+    print_step "Collect Server Information"
     generate_config_json
-    
-    # Validate JSON
+
+    print_step "Validate Config"
     if command -v jq &>/dev/null; then
         if jq empty "$OUTPUT_FILE" 2>/dev/null; then
-            print_success "Configuration file generated successfully"
+            print_success "Configuration file generated and validated"
         else
             print_error "Generated JSON is invalid"
             exit 1
@@ -428,14 +456,12 @@ main() {
     else
         print_warning "Cannot validate JSON (jq not installed)"
     fi
-    
-    # Set appropriate permissions
     chmod 644 "$OUTPUT_FILE"
-    
+
+    print_step "Upload to COS"
     upload_config_to_cos
+
     display_summary
-    
-    print_success "Export completed successfully!"
 }
 
 # Run main function
