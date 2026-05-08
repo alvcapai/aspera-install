@@ -588,9 +588,32 @@ prompt_cos_credentials() {
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             read -p "COS Endpoint (e.g., https://s3.us-south.cloud-object-storage.appdomain.cloud): " COS_ENDPOINT_INPUT
             read -p "COS Bucket Name: " COS_BUCKET_INPUT
-            read -p "COS Access Key: " COS_ACCESS_KEY_INPUT
-            read -s -p "COS Secret Key: " COS_SECRET_KEY_INPUT
-            echo
+            
+            echo ""
+            print_info "Please paste your IBM Cloud HMAC Service Credentials (JSON block)."
+            print_info "Type 'EOF' on a new line and press Enter when done:"
+            
+            PASTED_JSON=""
+            while IFS= read -r line; do
+                if [[ "$line" == "EOF" ]]; then
+                    break
+                fi
+                PASTED_JSON="$PASTED_JSON$line\n"
+            done
+            
+            # Parse HMAC JSON using awk
+            COS_ACCESS_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep '"access_key_id"' | head -1 | awk -F'"' '{print $4}')
+            COS_SECRET_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep '"secret_access_key"' | head -1 | awk -F'"' '{print $4}')
+            
+            if [ -z "$COS_ACCESS_KEY_INPUT" ] || [ -z "$COS_SECRET_KEY_INPUT" ]; then
+                print_warning "Could not parse HMAC keys from the pasted text."
+                print_info "Falling back to manual entry:"
+                read -p "COS Access Key: " COS_ACCESS_KEY_INPUT
+                read -s -p "COS Secret Key: " COS_SECRET_KEY_INPUT
+                echo
+            else
+                print_success "HMAC Credentials parsed successfully!"
+            fi
             
             # Export them so they are available to current and future functions
             export COS_ENDPOINT="${COS_ENDPOINT_INPUT}"
