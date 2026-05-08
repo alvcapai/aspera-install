@@ -1,0 +1,366 @@
+#!/bin/bash
+################################################################################
+# IBM Aspera HSTS Server Installation Script
+# Version: 1.0.0
+# Date: 2026-05-07
+# Description: Automated installation of IBM Aspera HSTS on Ubuntu 22.04
+################################################################################
+
+set -e  # Exit on error
+set -u  # Exit on undefined variable
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Configuration variables
+ASPERA_VERSION="4.4.7.2224"
+ASPERA_PACKAGE="ibm-aspera-hsts-${ASPERA_VERSION}-linux-64-release.deb"
+ASPERA_DOWNLOAD_URL="https://delivery04.dhe.ibm.com/sdfdl/v2/sar/CM/OS/0df2s/0/Xa.2/Xb.jusyLTSp44S03bbZUn3SBRT9s111g8E9QJjH7X9Wj607NzQsdj9Xhp7KT1M/Xc.CM/OS/0df2s/0/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb/Xd./Xf.Lpr./Xg.13862665/Xi.habanero/XY.habanero/XZ.-6eKQmgNmSg9wRrjpzUTJcGaTxpT_wnC/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb"
+ASPERA_INSTALL_DIR="/opt/aspera"
+ASPERA_DATA_DIR="/aspera/data"
+ASPERA_CACHE_DIR="/aspera/cache"
+ASPERA_LOG_DIR="/aspera/logs"
+
+# Function to print colored messages
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root or with sudo"
+        exit 1
+    fi
+}
+
+# Function to detect OS
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+    else
+        print_error "Cannot detect OS. /etc/os-release not found."
+        exit 1
+    fi
+    
+    print_info "Detected OS: $OS $OS_VERSION"
+    
+    if [[ "$OS" != "ubuntu" ]]; then
+        print_warning "This script is optimized for Ubuntu. Proceed with caution on other distributions."
+    fi
+}
+
+# Function to update system
+update_system() {
+    print_info "Updating system packages..."
+    apt-get update -qq
+    apt-get upgrade -y -qq
+    print_success "System updated successfully"
+}
+
+# Function to install dependencies
+install_dependencies() {
+    print_info "Installing required dependencies..."
+    apt-get install -y -qq \
+        wget \
+        curl \
+        net-tools \
+        openssh-server \
+        ufw \
+        iptables \
+        rsync \
+        openssl
+    print_success "Dependencies installed successfully"
+}
+
+# Function to download Aspera HSTS
+download_aspera() {
+    print_info "Downloading IBM Aspera HSTS ${ASPERA_VERSION}..."
+    cd /tmp
+    
+    if [ -f "${ASPERA_PACKAGE}" ]; then
+        print_warning "Package already exists. Removing old version..."
+        rm -f "${ASPERA_PACKAGE}"
+    fi
+    
+    wget -q --show-progress "${ASPERA_DOWNLOAD_URL}" || {
+        print_error "Failed to download Aspera HSTS"
+        exit 1
+    }
+    
+    print_success "Aspera HSTS downloaded successfully"
+}
+
+# Function to install Aspera HSTS
+install_aspera() {
+    print_info "Installing IBM Aspera HSTS..."
+    cd /tmp
+    
+    dpkg -i "${ASPERA_PACKAGE}" || {
+        print_error "Failed to install Aspera HSTS"
+        exit 1
+    }
+    
+    print_success "Aspera HSTS installed successfully"
+}
+
+# Function to create directories
+create_directories() {
+    print_info "Creating Aspera directories..."
+    
+    mkdir -p "${ASPERA_DATA_DIR}"
+    mkdir -p "${ASPERA_CACHE_DIR}"
+    mkdir -p "${ASPERA_LOG_DIR}"
+    
+    chown -R aspera:aspera "${ASPERA_DATA_DIR}"
+    chown -R aspera:aspera "${ASPERA_CACHE_DIR}"
+    chown -R aspera:aspera "${ASPERA_LOG_DIR}"
+    
+    chmod 755 "${ASPERA_DATA_DIR}"
+    chmod 755 "${ASPERA_CACHE_DIR}"
+    chmod 755 "${ASPERA_LOG_DIR}"
+    
+    print_success "Directories created successfully"
+}
+
+# Function to configure firewall
+configure_firewall() {
+    print_info "Configuring firewall rules..."
+    
+    # Enable UFW if not already enabled
+    if ! ufw status | grep -q "Status: active"; then
+        print_info "Enabling UFW firewall..."
+        ufw --force enable
+    fi
+    
+    # Allow SSH
+    ufw allow 22/tcp comment 'SSH'
+    
+    # Allow Aspera ports
+    ufw allow 33001/tcp comment 'Aspera TCP'
+    ufw allow 33001:33050/udp comment 'Aspera UDP FASP'
+    ufw allow 443/tcp comment 'HTTPS Web UI'
+    
+    # Reload firewall
+    ufw reload
+    
+    print_success "Firewall configured successfully"
+}
+
+# Function to generate encryption token
+generate_token() {
+    print_info "Generating encryption token..."
+    TOKEN=$(openssl rand -base64 32)
+    echo "${TOKEN}"
+}
+
+# Function to create basic aspera.conf
+create_aspera_conf() {
+    print_info "Creating basic aspera.conf configuration..."
+    
+    local TOKEN=$(generate_token)
+    local CONF_FILE="${ASPERA_INSTALL_DIR}/etc/aspera.conf"
+    
+    # Backup existing config if present
+    if [ -f "${CONF_FILE}" ]; then
+        cp "${CONF_FILE}" "${CONF_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+    
+    cat > "${CONF_FILE}" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<CONF version="2">
+  <!-- Global Settings -->
+  <server>
+    <transfer>
+      <!-- Cache directory -->
+      <cache_dir>${ASPERA_CACHE_DIR}</cache_dir>
+      
+      <!-- Throughput limits -->
+      <target_rate_kbps>10000000</target_rate_kbps>
+      <min_rate_kbps>100000</min_rate_kbps>
+      
+      <!-- Connection limits -->
+      <max_sessions>100</max_sessions>
+      
+      <!-- Timeout -->
+      <idle_timeout>300</idle_timeout>
+      
+      <!-- Encryption -->
+      <cipher>aes-256</cipher>
+      
+      <!-- Authentication token -->
+      <token_encryption_key>${TOKEN}</token_encryption_key>
+    </transfer>
+    
+    <!-- Network settings -->
+    <network>
+      <!-- UDP ports for FASP -->
+      <udp_port_range>
+        <min>33001</min>
+        <max>33050</max>
+      </udp_port_range>
+      
+      <!-- TCP port -->
+      <tcp_port>33001</tcp_port>
+    </network>
+    
+    <!-- Logging -->
+    <logging>
+      <level>info</level>
+      <file>${ASPERA_LOG_DIR}/aspera.log</file>
+      <max_size>100M</max_size>
+      <rotate>10</rotate>
+    </logging>
+    
+    <!-- Security -->
+    <security>
+      <!-- Disable anonymous -->
+      <anonymous_user_enabled>false</anonymous_user_enabled>
+    </security>
+  </server>
+  
+  <!-- User configuration -->
+  <users>
+    <user name="aspera">
+      <authorization>
+        <transfer>
+          <read_allowed>true</read_allowed>
+          <write_allowed>true</write_allowed>
+          <dir_allowed>true</dir_allowed>
+        </transfer>
+      </authorization>
+      <storage>
+        <path>${ASPERA_DATA_DIR}</path>
+      </storage>
+    </user>
+  </users>
+</CONF>
+EOF
+    
+    chown aspera:aspera "${CONF_FILE}"
+    chmod 640 "${CONF_FILE}"
+    
+    print_success "aspera.conf created successfully"
+    print_info "Encryption token: ${TOKEN}"
+}
+
+# Function to start Aspera services
+start_services() {
+    print_info "Starting Aspera services..."
+    
+    systemctl daemon-reload
+    systemctl enable asperanoded
+    systemctl restart asperanoded
+    
+    sleep 5
+    
+    if systemctl is-active --quiet asperanoded; then
+        print_success "Aspera services started successfully"
+    else
+        print_error "Failed to start Aspera services"
+        print_info "Check logs: journalctl -u asperanoded -n 50"
+        exit 1
+    fi
+}
+
+# Function to verify installation
+verify_installation() {
+    print_info "Verifying installation..."
+    
+    # Check if ascp exists
+    if [ -f "${ASPERA_INSTALL_DIR}/bin/ascp" ]; then
+        print_success "ascp binary found"
+        "${ASPERA_INSTALL_DIR}/bin/ascp" --version
+    else
+        print_error "ascp binary not found"
+        exit 1
+    fi
+    
+    # Check service status
+    if systemctl is-active --quiet asperanoded; then
+        print_success "asperanoded service is running"
+    else
+        print_error "asperanoded service is not running"
+        exit 1
+    fi
+    
+    # Check listening ports
+    if netstat -tuln | grep -q ":9092"; then
+        print_success "Aspera Node API listening on port 9092"
+    else
+        print_warning "Aspera Node API not listening on port 9092"
+    fi
+}
+
+# Function to display summary
+display_summary() {
+    echo ""
+    echo "=========================================="
+    echo "  IBM Aspera HSTS Installation Complete"
+    echo "=========================================="
+    echo ""
+    echo "Installation Directory: ${ASPERA_INSTALL_DIR}"
+    echo "Data Directory: ${ASPERA_DATA_DIR}"
+    echo "Cache Directory: ${ASPERA_CACHE_DIR}"
+    echo "Log Directory: ${ASPERA_LOG_DIR}"
+    echo ""
+    echo "Configuration File: ${ASPERA_INSTALL_DIR}/etc/aspera.conf"
+    echo ""
+    echo "Service Status:"
+    systemctl status asperanoded --no-pager | head -5
+    echo ""
+    echo "Next Steps:"
+    echo "1. Configure license: ${ASPERA_INSTALL_DIR}/bin/asconfigurator -x \"set_license_key;<YOUR_LICENSE_KEY>\""
+    echo "2. Create transfer users: useradd -m -d ${ASPERA_DATA_DIR}/username username"
+    echo "3. Test transfers from client"
+    echo ""
+    echo "Useful Commands:"
+    echo "- Check service: systemctl status asperanoded"
+    echo "- View logs: journalctl -u asperanoded -f"
+    echo "- Check config: ${ASPERA_INSTALL_DIR}/bin/asnodeadmin -c"
+    echo ""
+}
+
+# Main execution
+main() {
+    print_info "Starting IBM Aspera HSTS installation..."
+    echo ""
+    
+    check_root
+    detect_os
+    update_system
+    install_dependencies
+    download_aspera
+    install_aspera
+    create_directories
+    configure_firewall
+    create_aspera_conf
+    start_services
+    verify_installation
+    display_summary
+    
+    print_success "Installation completed successfully!"
+}
+
+# Run main function
+main "$@"
+
+# Made with Bob
