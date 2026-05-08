@@ -653,20 +653,28 @@ prompt_cos_credentials() {
             read -p "COS Bucket Name: " COS_BUCKET_INPUT
             
             echo ""
-            print_info "Please paste your IBM Cloud HMAC Service Credentials (JSON block)."
-            print_info "Type 'EOF' on a new line and press Enter when done:"
+            print_info "Please provide your IBM Cloud HMAC Service Credentials (JSON)."
+            print_info "You can provide the absolute path to a JSON file OR paste the content directly."
+            read -p "Path to JSON file (or press Enter to paste interactively): " JSON_FILE_PATH
             
             PASTED_JSON=""
-            while IFS= read -r line; do
-                if [[ "$line" == "EOF" ]]; then
-                    break
-                fi
-                PASTED_JSON="$PASTED_JSON$line\n"
-            done
+            if [ -n "$JSON_FILE_PATH" ] && [ -f "$JSON_FILE_PATH" ]; then
+                print_info "Reading credentials from $JSON_FILE_PATH..."
+                PASTED_JSON=$(cat "$JSON_FILE_PATH")
+            else
+                print_info "Please paste your IBM Cloud HMAC Service Credentials (JSON block)."
+                print_info "Type 'EOF' on a new line and press Enter when done:"
+                while IFS= read -r line; do
+                    if [[ "$line" == "EOF" ]]; then
+                        break
+                    fi
+                    PASTED_JSON="$PASTED_JSON$line\n"
+                done
+            fi
             
-            # Parse HMAC JSON using awk
-            COS_ACCESS_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep '"access_key_id"' | head -1 | awk -F'"' '{print $4}')
-            COS_SECRET_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep '"secret_access_key"' | head -1 | awk -F'"' '{print $4}')
+            # Parse HMAC JSON using awk to handle multi-line and single-line formats safely
+            COS_ACCESS_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep -o '"access_key_id"\s*:\s*"[^"]*"' | awk -F'"' '{print $4}')
+            COS_SECRET_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep -o '"secret_access_key"\s*:\s*"[^"]*"' | awk -F'"' '{print $4}')
             
             if [ -z "$COS_ACCESS_KEY_INPUT" ] || [ -z "$COS_SECRET_KEY_INPUT" ]; then
                 print_warning "Could not parse HMAC keys from the pasted text."
