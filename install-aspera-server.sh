@@ -42,6 +42,41 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function for beautiful spinner animation
+execute_with_spinner() {
+    local msg="$1"
+    shift
+    
+    # Hide cursor
+    tput civis >&2 2>/dev/null || true
+    
+    local tmp_out=$(mktemp)
+    "$@" > "$tmp_out" 2>&1 &
+    local pid=$!
+    
+    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local color='\033[0;35m' # Magenta for IBM UX vibe
+    local nc='\033[0m'
+    
+    while kill -0 $pid 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf "\r${color}[%c]${nc} %s..." "$spinstr" "$msg" >&2
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep 0.1
+    done
+    
+    wait $pid
+    local exit_code=$?
+    
+    # Clear line and restore cursor
+    printf "\r\033[K" >&2
+    tput cnorm >&2 2>/dev/null || true
+    
+    cat "$tmp_out"
+    rm -f "$tmp_out"
+    return $exit_code
+}
+
 # Function to check if running as root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -187,8 +222,7 @@ EOF
                 S3_TARGET="${ASPERA_COS_BIN_URL}"
             fi
             
-            print_info "Downloading from ${S3_TARGET}..."
-            if aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}"; then
+            if execute_with_spinner "Downloading from ${S3_TARGET}" aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
                 print_success "Aspera HSTS downloaded successfully from internal COS"
                 return 0
             else
@@ -527,7 +561,7 @@ EOF
     local UPLOAD_OUTPUT=""
 
     while [ "$UPLOAD_SUCCESS" = "false" ]; do
-        UPLOAD_OUTPUT=$(aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1)
+        UPLOAD_OUTPUT=$(execute_with_spinner "Uploading SSH key to IBM Cloud Object Storage" aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1)
         if [ $? -eq 0 ]; then
             print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
             UPLOAD_SUCCESS=true
@@ -655,12 +689,7 @@ prompt_cos_credentials() {
             
             # Quick check if awscli is available for validation
             if ! command -v aws &> /dev/null; then
-                print_info "Installing awscli for validation..."
-                if [ "$PKG_MANAGER" = "apt" ]; then
-                    apt-get install -y -qq awscli > /dev/null
-                elif [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; then
-                    $PKG_MANAGER install -y -q awscli > /dev/null
-                fi
+                execute_with_spinner "Installing temporary awscli for validation" apt-get install -y -qq awscli >/dev/null 2>&1 || yum install -y -q awscli >/dev/null 2>&1 || true
             fi
             
             mkdir -p /root/.aws
@@ -676,7 +705,7 @@ s3 =
     signature_version = s3v4
 EOF
             local VALIDATION_OUTPUT
-            VALIDATION_OUTPUT=$(aws s3 ls "s3://${COS_BUCKET_INPUT}" 2>&1)
+            VALIDATION_OUTPUT=$(execute_with_spinner "Authenticating and querying s3://${COS_BUCKET_INPUT}" aws s3 ls "s3://${COS_BUCKET_INPUT}" 2>&1)
             if [ $? -eq 0 ]; then
                 print_success "COS credentials validated successfully!"
                 print_success "COS credentials configured for this installation session."
