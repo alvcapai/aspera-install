@@ -49,6 +49,55 @@ check_user() {
     fi
 }
 
+# Function to fetch config from COS (Piggyback)
+fetch_config_from_cos() {
+    print_info "Checking if COS variables are set to fetch config..."
+
+    if [ -z "${COS_ACCESS_KEY:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_ENDPOINT:-}" ] || [ -z "${COS_BUCKET:-}" ]; then
+        print_info "COS variables not set. Cannot fetch config from COS."
+        return 0
+    fi
+
+    # Ensure AWS CLI is installed
+    if ! command -v aws &> /dev/null; then
+        print_warning "awscli not found. Cannot fetch config from COS."
+        return 0
+    fi
+
+    print_info "Fetching configuration from IBM Cloud Object Storage..."
+    
+    mkdir -p ~/.aws
+    cat > ~/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${COS_ACCESS_KEY}
+aws_secret_access_key = ${COS_SECRET_KEY}
+EOF
+
+    cat > ~/.aws/config << EOF
+[default]
+s3 =
+    endpoint_url = ${COS_ENDPOINT}
+    signature_version = s3v4
+EOF
+
+    # If no config file was passed as argument, default to a temp file
+    if [ -z "$CONFIG_FILE" ]; then
+        CONFIG_FILE="/tmp/aspera-server-config.json"
+    fi
+
+    # Download the config file
+    if aws s3 cp "s3://${COS_BUCKET}/config/aspera-server-config.json" "$CONFIG_FILE"; then
+        print_success "Configuration fetched successfully from s3://${COS_BUCKET}/config/aspera-server-config.json!"
+        
+        # Security cleanup
+        print_info "Removing config file from COS for security..."
+        aws s3 rm "s3://${COS_BUCKET}/config/aspera-server-config.json" || print_warning "Failed to remove config from COS."
+        rm -rf ~/.aws
+    else
+        print_warning "Failed to fetch configuration from COS."
+    fi
+}
+
 # Function to validate config file
 validate_config_file() {
     if [ -z "$CONFIG_FILE" ]; then
@@ -475,6 +524,7 @@ main() {
     echo ""
     
     check_user
+    fetch_config_from_cos
     validate_config_file
     check_aspera_client
     parse_server_config

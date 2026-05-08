@@ -295,6 +295,45 @@ generate_config_json() {
 EOF
 }
 
+# Function to upload config to COS (Piggyback)
+upload_config_to_cos() {
+    print_info "Checking if COS variables are set to upload config..."
+
+    if [ -z "${COS_ACCESS_KEY:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_ENDPOINT:-}" ] || [ -z "${COS_BUCKET:-}" ]; then
+        print_info "COS variables not set. Skipping configuration upload to COS."
+        return 0
+    fi
+
+    # Ensure AWS CLI is installed
+    if ! command -v aws &> /dev/null; then
+        print_warning "awscli not found. Cannot upload to COS."
+        return 0
+    fi
+
+    print_info "Uploading configuration to IBM Cloud Object Storage..."
+    
+    mkdir -p /root/.aws
+    cat > /root/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${COS_ACCESS_KEY}
+aws_secret_access_key = ${COS_SECRET_KEY}
+EOF
+
+    cat > /root/.aws/config << EOF
+[default]
+s3 =
+    endpoint_url = ${COS_ENDPOINT}
+    signature_version = s3v4
+EOF
+
+    # Upload the config file
+    if aws s3 cp "$OUTPUT_FILE" "s3://${COS_BUCKET}/config/aspera-server-config.json"; then
+        print_success "Configuration uploaded to s3://${COS_BUCKET}/config/aspera-server-config.json successfully!"
+    else
+        print_error "Failed to upload configuration to COS."
+    fi
+}
+
 # Function to display configuration summary
 display_summary() {
     print_info "Configuration exported to: $OUTPUT_FILE"
@@ -373,6 +412,7 @@ main() {
     # Set appropriate permissions
     chmod 644 "$OUTPUT_FILE"
     
+    upload_config_to_cos
     display_summary
     
     print_success "Export completed successfully!"
