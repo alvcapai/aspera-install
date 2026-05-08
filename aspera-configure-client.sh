@@ -188,15 +188,8 @@ setup_ssh_key() {
     
     # Check if key already exists
     if [ -f "$SSH_KEY_PATH" ]; then
-        print_info "SSH key already exists: $SSH_KEY_PATH"
-        
-        # Ask if user wants to use existing key
-        read -p "Use existing SSH key? (y/n): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Generating new SSH key..."
-            ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "aspera-client-$(hostname)"
-        fi
+        print_success "SSH key already exists locally: $SSH_KEY_PATH"
+        print_info "Using existing key automatically (assuming COS piggyback or prior setup)."
     else
         print_info "Generating new SSH key..."
         mkdir -p "$(dirname "$SSH_KEY_PATH")"
@@ -205,7 +198,10 @@ setup_ssh_key() {
     
     # Set correct permissions
     chmod 600 "$SSH_KEY_PATH"
-    chmod 644 "${SSH_KEY_PATH}.pub"
+    
+    if [ -f "${SSH_KEY_PATH}.pub" ]; then
+        chmod 644 "${SSH_KEY_PATH}.pub"
+    fi
     
     print_success "SSH key ready: $SSH_KEY_PATH"
 }
