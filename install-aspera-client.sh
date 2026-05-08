@@ -60,6 +60,21 @@ detect_os() {
     fi
     
     print_info "Detected OS: $OS $OS_VERSION"
+    
+    # Detect package manager
+    if command -v apt-get &> /dev/null; then
+        PKG_MANAGER="apt"
+        print_info "Package manager: apt (Debian/Ubuntu)"
+    elif command -v yum &> /dev/null; then
+        PKG_MANAGER="yum"
+        print_info "Package manager: yum (RHEL/CentOS)"
+    elif command -v dnf &> /dev/null; then
+        PKG_MANAGER="dnf"
+        print_info "Package manager: dnf (RHEL/CentOS/Fedora)"
+    else
+        print_error "Unsupported OS. Neither apt nor yum/dnf found."
+        exit 1
+    fi
 }
 
 # Function to install dependencies
@@ -72,14 +87,31 @@ install_dependencies() {
         exit 1
     fi
     
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq \
-        wget \
-        curl \
-        netcat-openbsd \
-        openssh-client \
-        rsync \
-        awscli
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+            wget \
+            curl \
+            netcat-openbsd \
+            openssh-client \
+            rsync \
+            awscli
+    elif [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; then
+        # RHEL/CentOS/Rocky equivalents
+        sudo $PKG_MANAGER install -y -q \
+            wget \
+            curl \
+            nc \
+            openssh-clients \
+            rsync \
+            tar \
+            procps-ng
+            
+        # awscli might not be in default repos for all RHEL versions, try to install
+        if ! command -v aws &> /dev/null; then
+            sudo $PKG_MANAGER install -y -q awscli || print_warning "awscli not found in default repos, COS fetch might fail."
+        fi
+    fi
     
     print_success "Dependencies installed successfully"
 }
