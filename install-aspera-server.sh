@@ -570,6 +570,43 @@ display_summary() {
     echo ""
 }
 
+# Function to prompt for COS credentials if running interactively
+prompt_cos_credentials() {
+    # Check if already provided via env
+    if [ -n "${COS_ACCESS_KEY:-}" ] && [ -n "${COS_SECRET_KEY:-}" ] && [ -n "${COS_ENDPOINT:-}" ] && [ -n "${COS_BUCKET:-}" ]; then
+        print_success "COS credentials found in environment variables."
+        return 0
+    fi
+    
+    if [ -t 0 ]; then
+        echo ""
+        print_info "IBM Cloud Object Storage (COS) can be used to:"
+        print_info "1. Download the Aspera HSTS binary automatically (if hosted there)."
+        print_info "2. Share SSH keys and config with the client script seamlessly (Piggyback)."
+        read -p "Do you want to configure COS credentials now? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            read -p "COS Endpoint (e.g., https://s3.us-south.cloud-object-storage.appdomain.cloud): " COS_ENDPOINT_INPUT
+            read -p "COS Bucket Name: " COS_BUCKET_INPUT
+            read -p "COS Access Key: " COS_ACCESS_KEY_INPUT
+            read -s -p "COS Secret Key: " COS_SECRET_KEY_INPUT
+            echo
+            
+            # Export them so they are available to current and future functions
+            export COS_ENDPOINT="${COS_ENDPOINT_INPUT}"
+            export COS_BUCKET="${COS_BUCKET_INPUT}"
+            export COS_ACCESS_KEY="${COS_ACCESS_KEY_INPUT}"
+            export COS_SECRET_KEY="${COS_SECRET_KEY_INPUT}"
+            
+            print_success "COS credentials configured for this installation session."
+        else
+            print_info "Skipping COS configuration."
+        fi
+    else
+        print_info "Non-interactive shell. Skipping COS prompt."
+    fi
+}
+
 # Main execution
 
 # Splash Screen
@@ -592,6 +629,7 @@ main() {
     
     check_root
     detect_os
+    prompt_cos_credentials
     update_system
     install_dependencies
     download_aspera
