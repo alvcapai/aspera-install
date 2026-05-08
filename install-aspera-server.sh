@@ -243,7 +243,7 @@ install_aspera() {
             }
             ;;
         yum|dnf)
-            $PKG_MANAGER install -y "${ASPERA_PACKAGE}" || {
+            $PKG_MANAGER install -y --nogpgcheck "${ASPERA_PACKAGE}" || {
                 print_error "Failed to install Aspera HSTS"
                 exit 1
             }
