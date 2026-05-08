@@ -476,15 +476,18 @@ verify_installation() {
 configure_cos_and_upload_key() {
     print_info "Configuring COS and generating Aspera SSH key..."
     
-    # Ensure aspera-user exists
+    local USER_HOME="/home/aspera-user"
+    
+    # Ensure aspera-user exists with home in /home
     if ! id "aspera-user" &>/dev/null; then
-        useradd -m -d ${ASPERA_DATA_DIR}/aspera-user -s /bin/bash aspera-user
+        useradd -m -d "${USER_HOME}" -s /bin/bash aspera-user
+        print_success "Created aspera-user with home directory ${USER_HOME}"
     fi
     
     # Create .ssh directory with proper permissions
-    local SSH_DIR="${ASPERA_DATA_DIR}/aspera-user/.ssh"
+    local SSH_DIR="${USER_HOME}/.ssh"
     mkdir -p "${SSH_DIR}"
-    chown -R aspera-user:aspera-user "${ASPERA_DATA_DIR}/aspera-user"
+    chown -R aspera-user:aspera-user "${USER_HOME}"
     chmod 700 "${SSH_DIR}"
 
     # Generate SSH key if not exists
@@ -494,6 +497,7 @@ configure_cos_and_upload_key() {
         cat "${SSH_KEY}.pub" >> "${SSH_DIR}/authorized_keys"
         chown aspera-user:aspera-user "${SSH_DIR}/authorized_keys"
         chmod 600 "${SSH_DIR}/authorized_keys"
+        print_success "SSH key generated successfully at ${SSH_KEY}"
     fi
 
     # Check for COS variables
