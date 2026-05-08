@@ -455,7 +455,22 @@ display_summary() {
 }
 
 # Main execution
+
+# Splash Screen
+print_splash() {
+    echo -e "${BLUE}"
+    echo "  ___ ____  __  __   _____                      _     _          _         "
+    echo " |_ _| __ )|  \/  | | ____|_  ___ __   ___ _ __| |_  | |    __ _| |__  ___ "
+    echo "  | ||  _ \| |\/| | |  _| \ \/ / '_ \ / _ \ '__| __| | |   / _\` | '_ \/ __|"
+    echo "  | || |_) | |  | | | |___ >  <| |_) |  __/ |  | |_  | |__| (_| | |_) \__ \\"
+    echo " |___|____/|_|  |_| |_____/_/\_\ .__/ \___|_|   \__| |_____\__,_|_.__/|___/"
+    echo "                               |_|                                         "
+    echo -e "${NC}"
+    echo ""
+}
+
 main() {
+    print_splash
     print_info "Starting Aspera client configuration..."
     echo ""
     
