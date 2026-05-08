@@ -299,6 +299,12 @@ EOF
 upload_config_to_cos() {
     print_info "Checking if COS variables are set to upload config..."
 
+    # Try to load saved credentials from installation phase
+    if [ -f "/opt/aspera/etc/cos_credentials.sh" ]; then
+        source "/opt/aspera/etc/cos_credentials.sh"
+        print_info "Loaded saved COS credentials from initial server installation."
+    fi
+
     if [ -z "${COS_ACCESS_KEY:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_ENDPOINT:-}" ] || [ -z "${COS_BUCKET:-}" ]; then
         print_info "COS variables not set. Skipping configuration upload to COS."
         return 0

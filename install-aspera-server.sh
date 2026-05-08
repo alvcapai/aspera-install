@@ -529,6 +529,16 @@ EOF
     }
     
     print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
+
+    # Save COS variables for future scripts (like export-config)
+    print_info "Saving COS environment variables for future scripts..."
+    cat > /opt/aspera/etc/cos_credentials.sh << EOF
+export COS_ACCESS_KEY="${COS_ACCESS_KEY}"
+export COS_SECRET_KEY="${COS_SECRET_KEY}"
+export COS_ENDPOINT="${COS_ENDPOINT}"
+export COS_BUCKET="${COS_BUCKET}"
+EOF
+    chmod 600 /opt/aspera/etc/cos_credentials.sh
 }
 
 # Function to display summary
