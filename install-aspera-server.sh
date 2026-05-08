@@ -479,16 +479,21 @@ configure_cos_and_upload_key() {
     # Ensure aspera-user exists
     if ! id "aspera-user" &>/dev/null; then
         useradd -m -d ${ASPERA_DATA_DIR}/aspera-user -s /bin/bash aspera-user
-        mkdir -p ${ASPERA_DATA_DIR}/aspera-user/.ssh
-        chown aspera-user:aspera-user ${ASPERA_DATA_DIR}/aspera-user/.ssh
     fi
+    
+    # Create .ssh directory with proper permissions
+    local SSH_DIR="${ASPERA_DATA_DIR}/aspera-user/.ssh"
+    mkdir -p "${SSH_DIR}"
+    chown -R aspera-user:aspera-user "${ASPERA_DATA_DIR}/aspera-user"
+    chmod 700 "${SSH_DIR}"
 
     # Generate SSH key if not exists
-    local SSH_KEY="${ASPERA_DATA_DIR}/aspera-user/.ssh/id_rsa"
+    local SSH_KEY="${SSH_DIR}/id_rsa"
     if [ ! -f "$SSH_KEY" ]; then
         sudo -u aspera-user ssh-keygen -t rsa -b 4096 -f "$SSH_KEY" -N "" -q
-        cat "${SSH_KEY}.pub" >> "${ASPERA_DATA_DIR}/aspera-user/.ssh/authorized_keys"
-        chmod 600 "${ASPERA_DATA_DIR}/aspera-user/.ssh/authorized_keys"
+        cat "${SSH_KEY}.pub" >> "${SSH_DIR}/authorized_keys"
+        chown aspera-user:aspera-user "${SSH_DIR}/authorized_keys"
+        chmod 600 "${SSH_DIR}/authorized_keys"
     fi
 
     # Check for COS variables
