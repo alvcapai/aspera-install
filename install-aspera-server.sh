@@ -676,6 +676,11 @@ prompt_cos_credentials() {
             COS_ACCESS_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep -o '"access_key_id"\s*:\s*"[^"]*"' | awk -F'"' '{print $4}')
             COS_SECRET_KEY_INPUT=$(echo -e "$PASTED_JSON" | grep -o '"secret_access_key"\s*:\s*"[^"]*"' | awk -F'"' '{print $4}')
             
+            # Ensure Endpoint has https://
+            if [[ ! "$COS_ENDPOINT_INPUT" =~ ^https?:// ]]; then
+                COS_ENDPOINT_INPUT="https://${COS_ENDPOINT_INPUT}"
+            fi
+            
             if [ -z "$COS_ACCESS_KEY_INPUT" ] || [ -z "$COS_SECRET_KEY_INPUT" ]; then
                 print_warning "Could not parse HMAC keys from the pasted text."
                 print_info "Falling back to manual entry:"
