@@ -18,8 +18,10 @@ NC='\033[0m' # No Color
 
 # Configuration variables
 ASPERA_VERSION="4.4.7.2224"
-ASPERA_PACKAGE="ibm-aspera-hsts-${ASPERA_VERSION}-linux-64-release.deb"
-ASPERA_DOWNLOAD_URL="https://delivery04.dhe.ibm.com/sdfdl/v2/sar/CM/OS/0df2s/0/Xa.2/Xb.jusyLTSp44S03bbZUn3SBRT9s111g8E9QJjH7X9Wj607NzQsdj9Xhp7KT1M/Xc.CM/OS/0df2s/0/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb/Xd./Xf.Lpr./Xg.13862665/Xi.habanero/XY.habanero/XZ.-6eKQmgNmSg9wRrjpzUTJcGaTxpT_wnC/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb"
+ASPERA_PACKAGE_DEB="ibm-aspera-hsts-${ASPERA_VERSION}-linux-64-release.deb"
+ASPERA_PACKAGE_RPM="ibm-aspera-hsts-${ASPERA_VERSION}-linux-64-release.rpm"
+ASPERA_DOWNLOAD_URL_DEB="https://delivery04.dhe.ibm.com/sdfdl/v2/sar/CM/OS/0df2s/0/Xa.2/Xb.jusyLTSp44S03bbZUn3SBRT9s111g8E9QJjH7X9Wj607NzQsdj9Xhp7KT1M/Xc.CM/OS/0df2s/0/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb/Xd./Xf.Lpr./Xg.13862665/Xi.habanero/XY.habanero/XZ.-6eKQmgNmSg9wRrjpzUTJcGaTxpT_wnC/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb"
+ASPERA_DOWNLOAD_URL_RPM="https://delivery04.dhe.ibm.com/sdfdl/v2/sar/CM/OS/0df2s/0/Xa.2/Xb.jusyLTSp44S03bbZUn3SBRT9s111g8E9QJjH7X9Wj607NzQsdj9Xhp7KT1M/Xc.CM/OS/0df2s/0/ibm-aspera-hsts-4.4.7.2224-linux-64-release.rpm/Xd./Xf.Lpr./Xg.13862665/Xi.habanero/XY.habanero/XZ.tN8vYL_Z0xGLKJqJpzUTJcGaTxpT_wnC/ibm-aspera-hsts-4.4.7.2224-linux-64-release.rpm"
 ASPERA_INSTALL_DIR="/opt/aspera"
 ASPERA_DATA_DIR="/aspera/data"
 ASPERA_CACHE_DIR="/aspera/cache"
@@ -50,7 +52,7 @@ check_root() {
     fi
 }
 
-# Function to detect OS
+# Function to detect OS and package manager
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -63,32 +65,79 @@ detect_os() {
     
     print_info "Detected OS: $OS $OS_VERSION"
     
-    if [[ "$OS" != "ubuntu" ]]; then
-        print_warning "This script is optimized for Ubuntu. Proceed with caution on other distributions."
+    # Detect package manager
+    if command -v apt-get &> /dev/null; then
+        PKG_MANAGER="apt"
+        ASPERA_PACKAGE="${ASPERA_PACKAGE_DEB}"
+        ASPERA_DOWNLOAD_URL="${ASPERA_DOWNLOAD_URL_DEB}"
+        print_info "Package manager: apt (Debian/Ubuntu)"
+    elif command -v yum &> /dev/null; then
+        PKG_MANAGER="yum"
+        ASPERA_PACKAGE="${ASPERA_PACKAGE_RPM}"
+        ASPERA_DOWNLOAD_URL="${ASPERA_DOWNLOAD_URL_RPM}"
+        print_info "Package manager: yum (RHEL/CentOS)"
+    elif command -v dnf &> /dev/null; then
+        PKG_MANAGER="dnf"
+        ASPERA_PACKAGE="${ASPERA_PACKAGE_RPM}"
+        ASPERA_DOWNLOAD_URL="${ASPERA_DOWNLOAD_URL_RPM}"
+        print_info "Package manager: dnf (RHEL/CentOS/Fedora)"
+    else
+        print_error "No supported package manager found (apt, yum, or dnf)"
+        exit 1
     fi
 }
 
 # Function to update system
 update_system() {
     print_info "Updating system packages..."
-    apt-get update -qq
-    apt-get upgrade -y -qq
+    
+    case "$PKG_MANAGER" in
+        apt)
+            apt-get update -qq
+            apt-get upgrade -y -qq
+            ;;
+        yum)
+            yum update -y -q
+            ;;
+        dnf)
+            dnf update -y -q
+            ;;
+    esac
+    
     print_success "System updated successfully"
 }
 
 # Function to install dependencies
 install_dependencies() {
     print_info "Installing required dependencies..."
-    apt-get install -y -qq \
-        wget \
-        curl \
-        net-tools \
-        openssh-server \
-        ufw \
-        iptables \
-        rsync \
-        openssl \
-        awscli
+    
+    case "$PKG_MANAGER" in
+        apt)
+            apt-get install -y -qq \
+                wget \
+                curl \
+                net-tools \
+                openssh-server \
+                ufw \
+                iptables \
+                rsync \
+                openssl \
+                awscli
+            ;;
+        yum|dnf)
+            $PKG_MANAGER install -y -q \
+                wget \
+                curl \
+                net-tools \
+                openssh-server \
+                firewalld \
+                iptables \
+                rsync \
+                openssl \
+                awscli
+            ;;
+    esac
+    
     print_success "Dependencies installed successfully"
 }
 
@@ -115,10 +164,20 @@ install_aspera() {
     print_info "Installing IBM Aspera HSTS..."
     cd /tmp
     
-    dpkg -i "${ASPERA_PACKAGE}" || {
-        print_error "Failed to install Aspera HSTS"
-        exit 1
-    }
+    case "$PKG_MANAGER" in
+        apt)
+            dpkg -i "${ASPERA_PACKAGE}" || {
+                print_error "Failed to install Aspera HSTS"
+                exit 1
+            }
+            ;;
+        yum|dnf)
+            $PKG_MANAGER install -y "${ASPERA_PACKAGE}" || {
+                print_error "Failed to install Aspera HSTS"
+                exit 1
+            }
+            ;;
+    esac
     
     print_success "Aspera HSTS installed successfully"
 }
@@ -146,22 +205,42 @@ create_directories() {
 configure_firewall() {
     print_info "Configuring firewall rules..."
     
-    # Enable UFW if not already enabled
-    if ! ufw status | grep -q "Status: active"; then
-        print_info "Enabling UFW firewall..."
-        ufw --force enable
-    fi
-    
-    # Allow SSH
-    ufw allow 22/tcp comment 'SSH'
-    
-    # Allow Aspera ports
-    ufw allow 33001/tcp comment 'Aspera TCP'
-    ufw allow 33001:33050/udp comment 'Aspera UDP FASP'
-    ufw allow 443/tcp comment 'HTTPS Web UI'
-    
-    # Reload firewall
-    ufw reload
+    case "$PKG_MANAGER" in
+        apt)
+            # Enable UFW if not already enabled
+            if ! ufw status | grep -q "Status: active"; then
+                print_info "Enabling UFW firewall..."
+                ufw --force enable
+            fi
+            
+            # Allow SSH
+            ufw allow 22/tcp comment 'SSH'
+            
+            # Allow Aspera ports
+            ufw allow 33001/tcp comment 'Aspera TCP'
+            ufw allow 33001:33050/udp comment 'Aspera UDP FASP'
+            ufw allow 443/tcp comment 'HTTPS Web UI'
+            
+            # Reload firewall
+            ufw reload
+            ;;
+        yum|dnf)
+            # Enable and start firewalld
+            systemctl enable firewalld
+            systemctl start firewalld
+            
+            # Allow SSH
+            firewall-cmd --permanent --add-service=ssh
+            
+            # Allow Aspera ports
+            firewall-cmd --permanent --add-port=33001/tcp
+            firewall-cmd --permanent --add-port=33001-33050/udp
+            firewall-cmd --permanent --add-port=443/tcp
+            
+            # Reload firewall
+            firewall-cmd --reload
+            ;;
+    esac
     
     print_success "Firewall configured successfully"
 }
