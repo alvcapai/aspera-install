@@ -222,8 +222,7 @@ EOF
                 S3_TARGET="${ASPERA_COS_BIN_URL}"
             fi
             
-            execute_with_spinner "Downloading from ${S3_TARGET}" aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null
-            if [ $? -eq 0 ]; then
+            if execute_with_spinner "Downloading from ${S3_TARGET}" aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
                 print_success "Aspera HSTS downloaded successfully from internal COS"
                 return 0
             else
@@ -698,7 +697,7 @@ prompt_cos_credentials() {
             
             # Quick check if awscli is available for validation
             if ! command -v aws &> /dev/null; then
-                execute_with_spinner "Installing temporary awscli for validation" apt-get install -y -qq awscli >/dev/null 2>&1 || yum install -y -q awscli >/dev/null 2>&1 || true
+                execute_with_spinner "Installing temporary awscli for validation" bash -c 'apt-get install -y -qq awscli >/dev/null 2>&1 || yum install -y -q awscli >/dev/null 2>&1 || true'
             fi
             
             mkdir -p /root/.aws
