@@ -337,6 +337,9 @@ create_aspera_conf() {
     local TOKEN=$(generate_token)
     local CONF_FILE="${ASPERA_INSTALL_DIR}/etc/aspera.conf"
     
+    # Ensure etc directory exists and has correct permissions
+    mkdir -p "${ASPERA_INSTALL_DIR}/etc"
+    
     # Backup existing config if present
     if [ -f "${CONF_FILE}" ]; then
         cp "${CONF_FILE}" "${CONF_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
@@ -413,8 +416,10 @@ create_aspera_conf() {
 </CONF>
 EOF
     
-    chown aspera:aspera "${CONF_FILE}"
-    chmod 640 "${CONF_FILE}"
+    # Set proper ownership and permissions
+    chown -R aspera:aspera "${ASPERA_INSTALL_DIR}/etc"
+    chmod 755 "${ASPERA_INSTALL_DIR}/etc"
+    chmod 644 "${CONF_FILE}"
     
     print_success "aspera.conf created successfully"
     print_info "Encryption token: ${TOKEN}"
