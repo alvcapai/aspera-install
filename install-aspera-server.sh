@@ -20,8 +20,6 @@ NC='\033[0m' # No Color
 ASPERA_VERSION="4.4.7.2224"
 ASPERA_PACKAGE_DEB="ibm-aspera-hsts-${ASPERA_VERSION}-linux-64-release.deb"
 ASPERA_PACKAGE_RPM="ibm-aspera-hsts-${ASPERA_VERSION}-linux-64-release.rpm"
-ASPERA_DOWNLOAD_URL_DEB="https://delivery04.dhe.ibm.com/sdfdl/v2/sar/CM/OS/0df2s/0/Xa.2/Xb.jusyLTSp44S03bbZUn3SBRT9s111g8E9QJjH7X9Wj607NzQsdj9Xhp7KT1M/Xc.CM/OS/0df2s/0/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb/Xd./Xf.Lpr./Xg.13862665/Xi.habanero/XY.habanero/XZ.-6eKQmgNmSg9wRrjpzUTJcGaTxpT_wnC/ibm-aspera-hsts-4.4.7.2224-linux-64-release.deb"
-ASPERA_DOWNLOAD_URL_RPM="https://delivery04.dhe.ibm.com/sdfdl/v2/sar/CM/OS/0df2s/0/Xa.2/Xb.jusyLTSp44S03bbZUn3SBRT9s111g8E9QJjH7X9Wj607NzQsdj9Xhp7KT1M/Xc.CM/OS/0df2s/0/ibm-aspera-hsts-4.4.7.2224-linux-64-release.rpm/Xd./Xf.Lpr./Xg.13862665/Xi.habanero/XY.habanero/XZ.tN8vYL_Z0xGLKJqJpzUTJcGaTxpT_wnC/ibm-aspera-hsts-4.4.7.2224-linux-64-release.rpm"
 ASPERA_INSTALL_DIR="/opt/aspera"
 ASPERA_DATA_DIR="/aspera/data"
 ASPERA_CACHE_DIR="/aspera/cache"
@@ -69,17 +67,14 @@ detect_os() {
     if command -v apt-get &> /dev/null; then
         PKG_MANAGER="apt"
         ASPERA_PACKAGE="${ASPERA_PACKAGE_DEB}"
-        ASPERA_DOWNLOAD_URL="${ASPERA_DOWNLOAD_URL_DEB}"
         print_info "Package manager: apt (Debian/Ubuntu)"
     elif command -v yum &> /dev/null; then
         PKG_MANAGER="yum"
         ASPERA_PACKAGE="${ASPERA_PACKAGE_RPM}"
-        ASPERA_DOWNLOAD_URL="${ASPERA_DOWNLOAD_URL_RPM}"
         print_info "Package manager: yum (RHEL/CentOS)"
     elif command -v dnf &> /dev/null; then
         PKG_MANAGER="dnf"
         ASPERA_PACKAGE="${ASPERA_PACKAGE_RPM}"
-        ASPERA_DOWNLOAD_URL="${ASPERA_DOWNLOAD_URL_RPM}"
         print_info "Package manager: dnf (RHEL/CentOS/Fedora)"
     else
         print_error "No supported package manager found (apt, yum, or dnf)"
@@ -143,20 +138,73 @@ install_dependencies() {
 
 # Function to download Aspera HSTS
 download_aspera() {
-    print_info "Downloading IBM Aspera HSTS ${ASPERA_VERSION}..."
+    print_info "Attempting to acquire IBM Aspera HSTS ${ASPERA_VERSION}..."
     cd /tmp
     
     if [ -f "${ASPERA_PACKAGE}" ]; then
-        print_warning "Package already exists. Removing old version..."
-        rm -f "${ASPERA_PACKAGE}"
+        print_success "Package ${ASPERA_PACKAGE} already exists locally. Skipping download."
+        return 0
     fi
     
-    wget -q --show-progress "${ASPERA_DOWNLOAD_URL}" || {
-        print_error "Failed to download Aspera HSTS"
-        exit 1
-    }
+    # Try custom COS bucket if variables are set
+    if [ -n "${ASPERA_COS_BIN_URL:-}" ] || ([ -n "${COS_ACCESS_KEY:-}" ] && [ -n "${COS_ENDPOINT:-}" ]); then
+        print_info "COS configuration detected. Attempting to download from internal storage..."
+        
+        # Ensure AWS CLI is installed
+        if ! command -v aws &> /dev/null; then
+            print_warning "awscli not found. Installing temporarily to download package..."
+            if [ "$PKG_MANAGER" = "apt" ]; then
+                apt-get install -y -qq awscli
+            else
+                yum install -y awscli
+            fi
+        fi
+        
+        # Setup temp credentials if necessary
+        if [ -n "${COS_ACCESS_KEY:-}" ]; then
+            mkdir -p /root/.aws
+            cat > /root/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${COS_ACCESS_KEY}
+aws_secret_access_key = ${COS_SECRET_KEY}
+EOF
+            cat > /root/.aws/config << EOF
+[default]
+s3 =
+    endpoint_url = ${COS_ENDPOINT}
+    signature_version = s3v4
+EOF
+            
+            local S3_TARGET="s3://${COS_BUCKET}/binaries/${ASPERA_PACKAGE}"
+            if [ -n "${ASPERA_COS_BIN_URL:-}" ]; then
+                S3_TARGET="${ASPERA_COS_BIN_URL}"
+            fi
+            
+            print_info "Downloading from ${S3_TARGET}..."
+            if aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}"; then
+                print_success "Aspera HSTS downloaded successfully from internal COS"
+                return 0
+            else
+                print_error "Failed to download from COS: ${S3_TARGET}"
+            fi
+        fi
+    fi
     
-    print_success "Aspera HSTS downloaded successfully"
+    # Try public web URL if provided
+    if [ -n "${ASPERA_DOWNLOAD_URL:-}" ]; then
+        print_info "Downloading from custom URL: ${ASPERA_DOWNLOAD_URL}"
+        if wget -q --show-progress "${ASPERA_DOWNLOAD_URL}" -O "/tmp/${ASPERA_PACKAGE}"; then
+            print_success "Aspera HSTS downloaded successfully"
+            return 0
+        fi
+    fi
+    
+    print_error "Could not acquire Aspera HSTS package (${ASPERA_PACKAGE})."
+    print_error "IBM Fix Central requires IBMid entitlement and cannot be scraped directly."
+    print_error "Please download the package manually and place it in /tmp/${ASPERA_PACKAGE}"
+    print_error "OR set ASPERA_DOWNLOAD_URL environment variable to a valid direct link."
+    print_error "OR configure COS credentials and place the binary in s3://\${COS_BUCKET}/binaries/"
+    exit 1
 }
 
 # Function to install Aspera HSTS
