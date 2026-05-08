@@ -87,7 +87,8 @@ install_dependencies() {
         ufw \
         iptables \
         rsync \
-        openssl
+        openssl \
+        awscli
     print_success "Dependencies installed successfully"
 }
 
@@ -310,6 +311,56 @@ verify_installation() {
     fi
 }
 
+# Function to configure COS and upload SSH key (Piggyback)
+configure_cos_and_upload_key() {
+    print_info "Configuring COS and generating Aspera SSH key..."
+    
+    # Ensure aspera-user exists
+    if ! id "aspera-user" &>/dev/null; then
+        useradd -m -d ${ASPERA_DATA_DIR}/aspera-user -s /bin/bash aspera-user
+        mkdir -p ${ASPERA_DATA_DIR}/aspera-user/.ssh
+        chown aspera-user:aspera-user ${ASPERA_DATA_DIR}/aspera-user/.ssh
+    fi
+
+    # Generate SSH key if not exists
+    local SSH_KEY="${ASPERA_DATA_DIR}/aspera-user/.ssh/id_rsa"
+    if [ ! -f "$SSH_KEY" ]; then
+        sudo -u aspera-user ssh-keygen -t rsa -b 4096 -f "$SSH_KEY" -N "" -q
+        cat "${SSH_KEY}.pub" >> "${ASPERA_DATA_DIR}/aspera-user/.ssh/authorized_keys"
+        chmod 600 "${ASPERA_DATA_DIR}/aspera-user/.ssh/authorized_keys"
+    fi
+
+    # Check for COS variables
+    if [ -z "${COS_ACCESS_KEY:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_ENDPOINT:-}" ] || [ -z "${COS_BUCKET:-}" ]; then
+        print_warning "COS variables not set. Skipping key upload. Set COS_ACCESS_KEY, COS_SECRET_KEY, COS_ENDPOINT, COS_BUCKET to enable auto-upload."
+        return 0
+    fi
+
+    # Configure AWS CLI for COS
+    print_info "Uploading key to IBM Cloud Object Storage..."
+    mkdir -p /root/.aws
+    cat > /root/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${COS_ACCESS_KEY}
+aws_secret_access_key = ${COS_SECRET_KEY}
+EOF
+
+    cat > /root/.aws/config << EOF
+[default]
+s3 =
+    endpoint_url = ${COS_ENDPOINT}
+    signature_version = s3v4
+EOF
+
+    # Upload the key
+    aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" || {
+        print_error "Failed to upload SSH key to COS"
+        return 1
+    }
+    
+    print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
+}
+
 # Function to display summary
 display_summary() {
     echo ""
@@ -355,6 +406,7 @@ main() {
     create_aspera_conf
     start_services
     verify_installation
+    configure_cos_and_upload_key
     display_summary
     
     print_success "Installation completed successfully!"
