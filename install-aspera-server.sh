@@ -523,12 +523,41 @@ s3 =
 EOF
 
     # Upload the key
-    aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" || {
-        print_error "Failed to upload SSH key to COS"
-        return 1
-    }
-    
-    print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
+    local UPLOAD_SUCCESS=false
+    local UPLOAD_OUTPUT=""
+
+    while [ "$UPLOAD_SUCCESS" = "false" ]; do
+        UPLOAD_OUTPUT=$(aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1)
+        if [ $? -eq 0 ]; then
+            print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
+            UPLOAD_SUCCESS=true
+        else
+            print_error "Failed to upload SSH key to COS."
+            print_error "Error Details from AWS CLI:"
+            echo -e "${YELLOW}${UPLOAD_OUTPUT}${NC}"
+            
+            if [ -t 0 ]; then
+                echo ""
+                read -p "Action - [R]etry upload, [C]ontinue without uploading, [A]bort script: " ACTION
+                case "${ACTION^^}" in
+                    C*)
+                        print_warning "Continuing without uploading SSH key. Client piggyback will not work."
+                        break
+                        ;;
+                    A*)
+                        print_error "Installation aborted by user."
+                        exit 1
+                        ;;
+                    *)
+                        print_info "Retrying upload..."
+                        ;;
+                esac
+            else
+                print_warning "Non-interactive shell. Continuing without uploading SSH key."
+                break
+            fi
+        fi
+    done
 
     # Save COS variables for future scripts (like export-config)
     print_info "Saving COS environment variables for future scripts..."
@@ -621,7 +650,58 @@ prompt_cos_credentials() {
             export COS_ACCESS_KEY="${COS_ACCESS_KEY_INPUT}"
             export COS_SECRET_KEY="${COS_SECRET_KEY_INPUT}"
             
-            print_success "COS credentials configured for this installation session."
+            # Upfront validation of COS credentials
+            print_info "Validating COS credentials against bucket s3://${COS_BUCKET_INPUT}..."
+            
+            # Quick check if awscli is available for validation
+            if ! command -v aws &> /dev/null; then
+                print_info "Installing awscli for validation..."
+                if [ "$PKG_MANAGER" = "apt" ]; then
+                    apt-get install -y -qq awscli > /dev/null
+                elif [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; then
+                    $PKG_MANAGER install -y -q awscli > /dev/null
+                fi
+            fi
+            
+            mkdir -p /root/.aws
+            cat > /root/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${COS_ACCESS_KEY_INPUT}
+aws_secret_access_key = ${COS_SECRET_KEY_INPUT}
+EOF
+            cat > /root/.aws/config << EOF
+[default]
+s3 =
+    endpoint_url = ${COS_ENDPOINT_INPUT}
+    signature_version = s3v4
+EOF
+            local VALIDATION_OUTPUT
+            VALIDATION_OUTPUT=$(aws s3 ls "s3://${COS_BUCKET_INPUT}" 2>&1)
+            if [ $? -eq 0 ]; then
+                print_success "COS credentials validated successfully!"
+                print_success "COS credentials configured for this installation session."
+            else
+                print_error "Failed to validate COS credentials. Cannot access bucket."
+                print_error "Error Details from AWS CLI:"
+                echo -e "${YELLOW}${VALIDATION_OUTPUT}${NC}"
+                
+                echo ""
+                read -p "Action - [R]etry entering credentials, [C]ontinue anyway, [A]bort script: " VAL_ACTION
+                case "${VAL_ACTION^^}" in
+                    C*)
+                        print_warning "Continuing with unvalidated COS credentials."
+                        ;;
+                    A*)
+                        print_error "Installation aborted by user."
+                        exit 1
+                        ;;
+                    *)
+                        print_info "Restarting COS prompt..."
+                        prompt_cos_credentials
+                        return
+                        ;;
+                esac
+            fi
         else
             print_info "Skipping COS configuration."
         fi
