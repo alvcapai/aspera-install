@@ -222,7 +222,8 @@ EOF
                 S3_TARGET="${ASPERA_COS_BIN_URL}"
             fi
             
-            if execute_with_spinner "Downloading from ${S3_TARGET}" aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
+            execute_with_spinner "Downloading from ${S3_TARGET}" aws s3 cp "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null
+            if [ $? -eq 0 ]; then
                 print_success "Aspera HSTS downloaded successfully from internal COS"
                 return 0
             else
@@ -561,7 +562,8 @@ EOF
     local UPLOAD_OUTPUT=""
 
     while [ "$UPLOAD_SUCCESS" = "false" ]; do
-        UPLOAD_OUTPUT=$(execute_with_spinner "Uploading SSH key to IBM Cloud Object Storage" aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1)
+        print_info "Uploading SSH key to IBM Cloud Object Storage..."
+        UPLOAD_OUTPUT=$(aws s3 cp "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1)
         if [ $? -eq 0 ]; then
             print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
             UPLOAD_SUCCESS=true
@@ -713,7 +715,11 @@ s3 =
     signature_version = s3v4
 EOF
             local VALIDATION_OUTPUT
-            VALIDATION_OUTPUT=$(execute_with_spinner "Authenticating and querying s3://${COS_BUCKET_INPUT}" aws s3 ls "s3://${COS_BUCKET_INPUT}" 2>&1)
+            
+            # Using standard execution without spinner because subshells inside command substitution block the animation
+            print_info "Authenticating and querying s3://${COS_BUCKET_INPUT}..."
+            VALIDATION_OUTPUT=$(aws s3 ls "s3://${COS_BUCKET_INPUT}" 2>&1)
+            
             if [ $? -eq 0 ]; then
                 print_success "COS credentials validated successfully!"
                 print_success "COS credentials configured for this installation session."
