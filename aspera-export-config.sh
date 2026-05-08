@@ -326,9 +326,11 @@ s3 =
     signature_version = s3v4
 EOF
 
+    COS_UPLOAD_SUCCESS="false"
     # Upload the config file
     if aws s3 cp "$OUTPUT_FILE" "s3://${COS_BUCKET}/config/aspera-server-config.json"; then
         print_success "Configuration uploaded to s3://${COS_BUCKET}/config/aspera-server-config.json successfully!"
+        COS_UPLOAD_SUCCESS="true"
     else
         print_error "Failed to upload configuration to COS."
     fi
@@ -363,11 +365,23 @@ display_summary() {
     
     echo ""
     echo "Next Steps:"
-    echo "1. Transfer this file to the client machine:"
-    echo "   scp $OUTPUT_FILE user@client:/tmp/"
-    echo ""
-    echo "2. On the client, run:"
-    echo "   ./aspera-configure-client.sh /tmp/$OUTPUT_FILE"
+    
+    if [ "${COS_UPLOAD_SUCCESS:-false}" = "true" ]; then
+        echo "1. On the client machine, export the SAME COS variables you used here:"
+        echo "   export COS_ACCESS_KEY=\"...\""
+        echo "   export COS_SECRET_KEY=\"...\""
+        echo "   export COS_ENDPOINT=\"...\""
+        echo "   export COS_BUCKET=\"...\""
+        echo ""
+        echo "2. Then run the configuration script (it will fetch the config via piggyback automatically):"
+        echo "   ./aspera-configure-client.sh"
+    else
+        echo "1. Transfer this file to the client machine:"
+        echo "   scp $OUTPUT_FILE user@client:/tmp/"
+        echo ""
+        echo "2. On the client, run:"
+        echo "   ./aspera-configure-client.sh /tmp/$(basename "$OUTPUT_FILE")"
+    fi
     echo ""
 }
 
