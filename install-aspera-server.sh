@@ -257,6 +257,13 @@ install_aspera() {
 create_directories() {
     print_info "Creating Aspera directories..."
     
+    # Check if aspera user exists, create if not
+    if ! id "aspera" &>/dev/null; then
+        print_info "Creating aspera system user..."
+        useradd -r -s /bin/bash -d "${ASPERA_INSTALL_DIR}" aspera
+        print_success "Aspera user created"
+    fi
+    
     mkdir -p "${ASPERA_DATA_DIR}"
     mkdir -p "${ASPERA_CACHE_DIR}"
     mkdir -p "${ASPERA_LOG_DIR}"
