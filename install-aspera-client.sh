@@ -78,7 +78,8 @@ install_dependencies() {
         curl \
         netcat-openbsd \
         openssh-client \
-        rsync
+        rsync \
+        awscli
     
     print_success "Dependencies installed successfully"
 }
@@ -152,6 +153,55 @@ configure_path() {
         echo "export PATH=\$PATH:\$HOME/.aspera/connect/bin" >> "$SHELL_RC"
         print_success "PATH configured in $SHELL_RC"
         print_info "Run 'source $SHELL_RC' to apply changes"
+    fi
+}
+
+# Function to download key from COS (Piggyback)
+download_key_from_cos() {
+    local KEY_PATH="$HOME/.ssh/aspera_transfer_key"
+    
+    if [ -f "$KEY_PATH" ]; then
+        print_info "SSH key already exists locally. Skipping COS download."
+        return 0
+    fi
+
+    if [ -z "${COS_ACCESS_KEY:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_ENDPOINT:-}" ] || [ -z "${COS_BUCKET:-}" ]; then
+        print_info "COS variables not set. Skipping key download from COS."
+        return 0
+    fi
+
+    print_info "Downloading Aspera SSH key from IBM Cloud Object Storage..."
+    
+    mkdir -p ~/.aws
+    cat > ~/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${COS_ACCESS_KEY}
+aws_secret_access_key = ${COS_SECRET_KEY}
+EOF
+
+    cat > ~/.aws/config << EOF
+[default]
+s3 =
+    endpoint_url = ${COS_ENDPOINT}
+    signature_version = s3v4
+EOF
+
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+
+    # Download the key
+    if aws s3 cp "s3://${COS_BUCKET}/keys/aspera_rsa" "$KEY_PATH"; then
+        chmod 600 "$KEY_PATH"
+        print_success "SSH key downloaded from COS successfully!"
+        
+        # Cleanup from COS for security
+        print_info "Removing SSH key from COS for security..."
+        aws s3 rm "s3://${COS_BUCKET}/keys/aspera_rsa" || print_warning "Failed to remove key from COS."
+        
+        # Cleanup local AWS credentials
+        rm -rf ~/.aws
+    else
+        print_warning "Failed to download SSH key from COS. Will generate a new one."
     fi
 }
 
@@ -345,6 +395,7 @@ main() {
     download_aspera
     install_aspera
     configure_path
+    download_key_from_cos
     generate_ssh_key
     verify_installation
     create_test_file
