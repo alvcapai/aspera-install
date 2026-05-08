@@ -142,7 +142,14 @@ download_aspera() {
     cd /tmp
     
     if [ -f "${ASPERA_PACKAGE}" ]; then
-        print_success "Package ${ASPERA_PACKAGE} already exists locally. Skipping download."
+        print_success "Package ${ASPERA_PACKAGE} already exists locally in /tmp. Skipping download."
+        return 0
+    fi
+
+    # Try local file via environment variable first
+    if [ -n "${ASPERA_LOCAL_FILE:-}" ] && [ -f "${ASPERA_LOCAL_FILE}" ]; then
+        print_info "Using local file provided via ASPERA_LOCAL_FILE: ${ASPERA_LOCAL_FILE}"
+        cp "${ASPERA_LOCAL_FILE}" "/tmp/${ASPERA_PACKAGE}"
         return 0
     fi
     
@@ -199,12 +206,28 @@ EOF
         fi
     fi
     
-    print_error "Could not acquire Aspera HSTS package (${ASPERA_PACKAGE})."
-    print_error "IBM Fix Central requires IBMid entitlement and cannot be scraped directly."
-    print_error "Please download the package manually and place it in /tmp/${ASPERA_PACKAGE}"
-    print_error "OR set ASPERA_DOWNLOAD_URL environment variable to a valid direct link."
-    print_error "OR configure COS credentials and place the binary in s3://\${COS_BUCKET}/binaries/"
-    exit 1
+    print_warning "Could not acquire Aspera HSTS package automatically from COS or URL."
+    
+    # Check if running interactively to ask for local path
+    if [ -t 0 ]; then
+        echo ""
+        read -p "Enter the full absolute path to the local Aspera package (.deb or .rpm) [or press Ctrl+C to abort]: " USER_LOCAL_FILE
+        if [ -n "$USER_LOCAL_FILE" ] && [ -f "$USER_LOCAL_FILE" ]; then
+            print_info "Copying $USER_LOCAL_FILE to /tmp..."
+            cp "$USER_LOCAL_FILE" "/tmp/${ASPERA_PACKAGE}"
+            print_success "Local package copied successfully."
+            return 0
+        else
+            print_error "File not found or invalid path: $USER_LOCAL_FILE"
+            exit 1
+        fi
+    else
+        print_error "Non-interactive shell detected and package not found."
+        print_error "Please place the package in /tmp/${ASPERA_PACKAGE}"
+        print_error "OR set ASPERA_LOCAL_FILE=/path/to/pkg environment variable."
+        print_error "OR configure COS credentials to download from s3."
+        exit 1
+    fi
 }
 
 # Function to install Aspera HSTS
