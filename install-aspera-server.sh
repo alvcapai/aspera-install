@@ -325,14 +325,13 @@ configure_firewall() {
 
 # Function to generate encryption token
 generate_token() {
-    print_info "Generating encryption token..."
-    TOKEN=$(openssl rand -base64 32)
-    echo "${TOKEN}"
+    openssl rand -base64 32
 }
 
 # Function to create basic aspera.conf
 create_aspera_conf() {
     print_info "Creating basic aspera.conf configuration..."
+    print_info "Generating encryption token..."
     
     local TOKEN=$(generate_token)
     local CONF_FILE="${ASPERA_INSTALL_DIR}/etc/aspera.conf"
