@@ -167,7 +167,8 @@ install_dependencies() {
                 iptables \
                 rsync \
                 openssl \
-                python3
+                python3 \
+                jq
             ;;
         yum|dnf)
             $PKG_MANAGER install -y -q \
@@ -179,7 +180,8 @@ install_dependencies() {
                 iptables \
                 rsync \
                 openssl \
-                python3
+                python3 \
+                jq
             ;;
     esac
 
