@@ -88,6 +88,45 @@ record_test() {
     echo "[$RESULT] $TEST_NAME: $MESSAGE" >> "$REPORT_FILE"
 }
 
+# Install any missing runtime deps (bc for arithmetic, jq for JSON,
+# nc for SSH-port test). Uses sudo because we run as a regular user.
+ensure_dependencies() {
+    local missing=()
+    command -v bc  &> /dev/null || missing+=(bc)
+    command -v jq  &> /dev/null || missing+=(jq)
+    command -v nc  &> /dev/null || missing+=(netcat-openbsd)
+
+    if [ ${#missing[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    if ! command -v sudo &> /dev/null; then
+        print_warning "Missing deps: ${missing[*]} (sudo unavailable; install manually)"
+        return 0
+    fi
+
+    print_info "Installing missing dependencies: ${missing[*]}"
+
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update -qq >/dev/null 2>&1 || true
+        sudo apt-get install -y -qq "${missing[@]}" >/dev/null 2>&1 || true
+    elif command -v dnf &> /dev/null || command -v yum &> /dev/null; then
+        local pm; pm=$(command -v dnf || command -v yum)
+        local rh_pkgs=()
+        for p in "${missing[@]}"; do
+            case "$p" in
+                netcat-openbsd) rh_pkgs+=(nmap-ncat) ;;
+                *) rh_pkgs+=("$p") ;;
+            esac
+        done
+        sudo "$pm" install -y -q "${rh_pkgs[@]}" >/dev/null 2>&1 || true
+    fi
+
+    command -v bc &> /dev/null || print_warning "bc could not be installed; throughput math will be skipped."
+    command -v jq &> /dev/null || print_warning "jq could not be installed; JSON report will be skipped."
+    command -v nc &> /dev/null || print_warning "nc could not be installed; SSH-port test will be skipped."
+}
+
 # Function to load client configuration
 load_config() {
     if [ ! -f "$CLIENT_CONFIG_FILE" ]; then
@@ -446,6 +485,7 @@ main() {
     echo "Generated: $(date)" >> "$REPORT_FILE"
     echo "========================================" >> "$REPORT_FILE"
     
+    ensure_dependencies
     load_config
     setup_test_environment
     

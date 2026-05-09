@@ -64,6 +64,60 @@ check_user() {
     fi
 }
 
+# Install any missing runtime deps (jq for JSON parsing, awscli for COS,
+# nc for network tests). Uses sudo because we run as a regular user.
+ensure_dependencies() {
+    local missing=()
+    command -v jq  &> /dev/null || missing+=(jq)
+    command -v aws &> /dev/null || missing+=(awscli)
+    command -v nc  &> /dev/null || missing+=(netcat-openbsd)
+
+    if [ ${#missing[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    if ! command -v sudo &> /dev/null; then
+        print_warning "Missing deps: ${missing[*]} (sudo unavailable; install manually)"
+        return 0
+    fi
+
+    print_info "Installing missing dependencies: ${missing[*]}"
+
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update -qq >/dev/null 2>&1 || true
+        sudo apt-get install -y -qq "${missing[@]}" >/dev/null 2>&1 || true
+    elif command -v dnf &> /dev/null; then
+        # On RHEL/dnf the package names differ
+        local rh_pkgs=()
+        for p in "${missing[@]}"; do
+            case "$p" in
+                netcat-openbsd) rh_pkgs+=(nmap-ncat) ;;
+                *) rh_pkgs+=("$p") ;;
+            esac
+        done
+        sudo dnf install -y -q "${rh_pkgs[@]}" >/dev/null 2>&1 || true
+    elif command -v yum &> /dev/null; then
+        local rh_pkgs=()
+        for p in "${missing[@]}"; do
+            case "$p" in
+                netcat-openbsd) rh_pkgs+=(nmap-ncat) ;;
+                *) rh_pkgs+=("$p") ;;
+            esac
+        done
+        sudo yum install -y -q "${rh_pkgs[@]}" >/dev/null 2>&1 || true
+    fi
+
+    # awscli pip fallback for PEP 668 distros
+    if ! command -v aws &> /dev/null && command -v pip3 &> /dev/null; then
+        pip3 install --quiet --user --break-system-packages awscli >/dev/null 2>&1 || true
+        [ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"
+    fi
+
+    command -v jq  &> /dev/null || print_warning "jq could not be installed; configuration parsing will fail."
+    command -v aws &> /dev/null || print_warning "awscli could not be installed; COS piggyback fetch will be skipped."
+    command -v nc  &> /dev/null || print_warning "nc could not be installed; SSH-port reachability test will be skipped."
+}
+
 # Function to fetch config from COS (Piggyback)
 fetch_config_from_cos() {
     print_info "Checking if COS variables are set to fetch config..."
@@ -542,6 +596,7 @@ main() {
 
     print_step "Pre-flight Checks"
     check_user
+    ensure_dependencies
 
     print_step "Fetch & Validate Config"
     fetch_config_from_cos

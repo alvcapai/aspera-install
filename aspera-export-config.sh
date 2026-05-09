@@ -61,6 +61,39 @@ check_root() {
     fi
 }
 
+# Install any missing runtime deps (jq for JSON, awscli for COS upload).
+# Runs as root, so no sudo needed.
+ensure_dependencies() {
+    local missing=()
+    command -v jq &> /dev/null || missing+=(jq)
+    command -v aws &> /dev/null || missing+=(awscli)
+
+    if [ ${#missing[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    print_info "Installing missing dependencies: ${missing[*]}"
+
+    if command -v apt-get &> /dev/null; then
+        apt-get update -qq >/dev/null 2>&1 || true
+        # jq from apt is reliable; awscli may be unavailable on Ubuntu 24.04+,
+        # so try apt first then fall back to pip3.
+        apt-get install -y -qq "${missing[@]}" >/dev/null 2>&1 || true
+    elif command -v dnf &> /dev/null; then
+        dnf install -y -q "${missing[@]}" >/dev/null 2>&1 || true
+    elif command -v yum &> /dev/null; then
+        yum install -y -q "${missing[@]}" >/dev/null 2>&1 || true
+    fi
+
+    # awscli pip fallback for distros where the package is gone
+    if ! command -v aws &> /dev/null && command -v pip3 &> /dev/null; then
+        pip3 install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
+    fi
+
+    command -v jq  &> /dev/null || print_warning "jq could not be installed; JSON validation and pretty summary will be skipped."
+    command -v aws &> /dev/null || print_warning "awscli could not be installed; COS upload will be skipped."
+}
+
 # Function to check if Aspera is installed
 check_aspera_installed() {
     if [ ! -d "$ASPERA_DIR" ]; then
@@ -325,21 +358,10 @@ upload_config_to_cos() {
         return 0
     fi
 
-    # Ensure AWS CLI is installed (best-effort; this script is a small utility,
-    # so we try the package manager only and skip cleanly if unavailable).
+    # awscli is installed in ensure_dependencies during pre-flight; if it's
+    # still missing here, that step already warned the user, so just skip.
     if ! command -v aws &> /dev/null; then
-        if command -v apt-get &> /dev/null; then
-            apt-get install -y -qq awscli >/dev/null 2>&1 || \
-            pip3 install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
-        elif command -v yum &> /dev/null || command -v dnf &> /dev/null; then
-            { command -v dnf &>/dev/null && dnf install -y -q awscli; } || \
-            { command -v yum &>/dev/null && yum install -y -q awscli; } || \
-            pip3 install --quiet --break-system-packages awscli >/dev/null 2>&1 || true
-        fi
-    fi
-
-    if ! command -v aws &> /dev/null; then
-        print_warning "awscli not found. Cannot upload to COS."
+        print_warning "awscli not available. Skipping COS upload."
         return 0
     fi
 
@@ -440,6 +462,7 @@ main() {
 
     print_step "Pre-flight Checks"
     check_root
+    ensure_dependencies
     check_aspera_installed
 
     print_step "Collect Server Information"
