@@ -32,6 +32,10 @@ ASPERA_DATA_DIR="/aspera/data"
 ASPERA_CACHE_DIR="/aspera/cache"
 ASPERA_LOG_DIR="/aspera/logs"
 
+# Persistent COS credentials file — sourced on subsequent runs so the user
+# doesn't have to re-enter HMAC keys.
+COS_CREDENTIALS_FILE="/opt/aspera/etc/cos_credentials.sh"
+
 print_info() {
     echo -e "  ${CYAN}→${NC} $1"
 }
@@ -679,15 +683,10 @@ EOF
         fi
     done
 
-    # Save COS variables for future scripts (like export-config)
-    print_info "Saving COS environment variables for future scripts..."
-    cat > /opt/aspera/etc/cos_credentials.sh << EOF
-export COS_ACCESS_KEY="${COS_ACCESS_KEY}"
-export COS_SECRET_KEY="${COS_SECRET_KEY}"
-export COS_ENDPOINT="${COS_ENDPOINT}"
-export COS_BUCKET="${COS_BUCKET}"
-EOF
-    chmod 600 /opt/aspera/etc/cos_credentials.sh
+    # Refresh saved COS credentials (idempotent — same content as the early
+    # save in prompt_cos_credentials) so export-config and re-runs can pick
+    # them up without re-prompting.
+    save_cos_credentials
 }
 
 display_summary() {
@@ -724,9 +723,28 @@ display_summary() {
     echo ""
 }
 
+# Persist COS credentials so subsequent runs of any script can reuse them.
+save_cos_credentials() {
+    mkdir -p "$(dirname "$COS_CREDENTIALS_FILE")"
+    cat > "$COS_CREDENTIALS_FILE" << EOF
+export COS_ACCESS_KEY="${COS_ACCESS_KEY}"
+export COS_SECRET_KEY="${COS_SECRET_KEY}"
+export COS_ENDPOINT="${COS_ENDPOINT}"
+export COS_BUCKET="${COS_BUCKET}"
+EOF
+    chmod 600 "$COS_CREDENTIALS_FILE"
+}
+
 # Function to prompt for COS credentials if running interactively
 prompt_cos_credentials() {
-    # Check if already provided via env
+    # If we have a previously saved file and no env override, reuse it.
+    if [ -f "$COS_CREDENTIALS_FILE" ] && [ -z "${COS_ACCESS_KEY:-}" ]; then
+        # shellcheck disable=SC1090
+        source "$COS_CREDENTIALS_FILE"
+        print_success "Loaded saved COS credentials from ${COS_CREDENTIALS_FILE}."
+    fi
+
+    # Check if already provided via env (or just-loaded from file)
     if [ -n "${COS_ACCESS_KEY:-}" ] && [ -n "${COS_SECRET_KEY:-}" ] && [ -n "${COS_ENDPOINT:-}" ] && [ -n "${COS_BUCKET:-}" ]; then
         print_success "COS credentials found in environment variables."
         return 0
@@ -787,7 +805,12 @@ prompt_cos_credentials() {
             export COS_BUCKET="${COS_BUCKET_INPUT}"
             export COS_ACCESS_KEY="${COS_ACCESS_KEY_INPUT}"
             export COS_SECRET_KEY="${COS_SECRET_KEY_INPUT}"
-            
+
+            # Persist for re-runs (saved before validation so even a failed
+            # validation doesn't force the user to re-enter the values).
+            save_cos_credentials
+            print_success "COS credentials saved to ${COS_CREDENTIALS_FILE} for future runs."
+
             # Upfront validation of COS credentials
             print_info "Validating COS credentials against bucket s3://${COS_BUCKET_INPUT}..."
             
