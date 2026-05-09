@@ -175,26 +175,39 @@ install_awscli() {
 
 # Function to download Aspera Connect
 download_aspera() {
-    print_info "Downloading IBM Aspera Connect ${ASPERA_VERSION}..."
-    cd /tmp
-    
-    if [ -f "${ASPERA_PACKAGE}" ]; then
-        print_warning "Package already exists. Removing old version..."
-        rm -f "${ASPERA_PACKAGE}"
+    print_info "Acquiring IBM Aspera Connect ${ASPERA_VERSION}..."
+
+    # Prefer /tmp, but fall back to a user-owned dir if the existing file
+    # there is not writable (common when a previous sudo'd run left a
+    # root-owned copy and /tmp's sticky bit blocks deletion).
+    DOWNLOAD_DIR="/tmp"
+    if [ -e "/tmp/${ASPERA_PACKAGE}" ] && [ ! -w "/tmp/${ASPERA_PACKAGE}" ]; then
+        DOWNLOAD_DIR="$HOME/.cache/aspera-install"
+        mkdir -p "$DOWNLOAD_DIR"
+        print_warning "/tmp/${ASPERA_PACKAGE} is not writable; using $DOWNLOAD_DIR instead."
     fi
-    
+    cd "$DOWNLOAD_DIR"
+
+    if [ -f "${ASPERA_PACKAGE}" ] && [ -s "${ASPERA_PACKAGE}" ]; then
+        print_success "Package already present at ${DOWNLOAD_DIR}/${ASPERA_PACKAGE}. Skipping download."
+        return 0
+    fi
+
+    # Remove any stale zero-byte file left from an interrupted download
+    [ -f "${ASPERA_PACKAGE}" ] && rm -f "${ASPERA_PACKAGE}" 2>/dev/null || true
+
     wget -q --show-progress "${ASPERA_DOWNLOAD_URL}" || {
         print_error "Failed to download Aspera Connect"
         exit 1
     }
-    
+
     print_success "Aspera Connect downloaded successfully"
 }
 
 # Function to extract and install Aspera Connect
 install_aspera() {
     print_info "Installing IBM Aspera Connect..."
-    cd /tmp
+    cd "${DOWNLOAD_DIR:-/tmp}"
     
     # Extract the archive
     tar -xzf "${ASPERA_PACKAGE}" || {
