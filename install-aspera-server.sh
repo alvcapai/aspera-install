@@ -21,7 +21,7 @@ NC='\033[0m'
 
 # Progress tracking
 STEP=0
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 
 # Configuration variables
 ASPERA_VERSION="4.4.7.2224"
@@ -529,6 +529,35 @@ start_services() {
     fi
 }
 
+# Enable SSH access for root (key-based) so the client/configurator can
+# connect using the SSH key produced by the piggyback flow. Sudo users
+# already work out of the box; this only relaxes root.
+enable_ssh_root_login() {
+    local sshd_config="/etc/ssh/sshd_config"
+    [ -f "$sshd_config" ] || { print_warning "sshd_config not found; skipping SSH root config."; return 0; }
+
+    print_info "Enabling SSH access for root (key-based)..."
+
+    # Backup once
+    [ -f "${sshd_config}.bak" ] || cp "$sshd_config" "${sshd_config}.bak"
+
+    # Replace any existing PermitRootLogin line (commented or not), or append
+    if grep -qE '^[#[:space:]]*PermitRootLogin' "$sshd_config"; then
+        sed -i -E 's|^[#[:space:]]*PermitRootLogin.*|PermitRootLogin prohibit-password|' "$sshd_config"
+    else
+        echo "PermitRootLogin prohibit-password" >> "$sshd_config"
+    fi
+
+    # Reload sshd (service name varies between distros)
+    if systemctl is-active --quiet ssh; then
+        systemctl reload ssh
+    elif systemctl is-active --quiet sshd; then
+        systemctl reload sshd
+    fi
+
+    print_success "Root SSH login enabled with key authentication only (prohibit-password)."
+}
+
 # Function to verify installation
 verify_installation() {
     print_info "Verifying installation..."
@@ -870,6 +899,9 @@ main() {
 
     print_step "Create Configuration"
     create_aspera_conf
+
+    print_step "Enable SSH Access"
+    enable_ssh_root_login
 
     print_step "Start Services"
     start_services
