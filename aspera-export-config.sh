@@ -361,7 +361,7 @@ EOF
 
     COS_UPLOAD_SUCCESS="false"
     # Pass --endpoint-url explicitly: the s3= config block is not honoured by `aws s3 cp`.
-    if aws s3 cp --endpoint-url "${COS_ENDPOINT}" "$OUTPUT_FILE" "s3://${COS_BUCKET}/config/aspera-server-config.json"; then
+    if aws s3 cp --endpoint-url "${COS_ENDPOINT}" --no-verify-ssl "$OUTPUT_FILE" "s3://${COS_BUCKET}/config/aspera-server-config.json"; then
         print_success "Configuration uploaded to s3://${COS_BUCKET}/config/aspera-server-config.json successfully!"
         COS_UPLOAD_SUCCESS="true"
     else

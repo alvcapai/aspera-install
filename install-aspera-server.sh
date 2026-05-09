@@ -271,7 +271,7 @@ EOF
 
             # Pass --endpoint-url explicitly: the s3= config block is not honoured by `aws s3 cp`.
             if execute_with_spinner "Downloading from ${S3_TARGET}" \
-                aws s3 cp --endpoint-url "${COS_ENDPOINT}" "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
+                aws s3 cp --endpoint-url "${COS_ENDPOINT}" --no-verify-ssl "${S3_TARGET}" "/tmp/${ASPERA_PACKAGE}" >/dev/null; then
                 print_success "Aspera HSTS downloaded successfully from internal COS"
                 return 0
             else
@@ -619,7 +619,7 @@ EOF
 
     while [ "$UPLOAD_SUCCESS" = "false" ]; do
         print_info "Uploading SSH key to IBM Cloud Object Storage..."
-        if UPLOAD_OUTPUT=$(aws s3 cp --endpoint-url "${COS_ENDPOINT}" "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1); then
+        if UPLOAD_OUTPUT=$(aws s3 cp --endpoint-url "${COS_ENDPOINT}" --no-verify-ssl "$SSH_KEY" "s3://${COS_BUCKET}/keys/aspera_rsa" 2>&1); then
             print_success "SSH key uploaded to s3://${COS_BUCKET}/keys/aspera_rsa successfully!"
             UPLOAD_SUCCESS=true
         else
@@ -785,7 +785,7 @@ EOF
 
             # Using standard execution without spinner because subshells inside command substitution block the animation
             print_info "Authenticating and querying s3://${COS_BUCKET_INPUT}..."
-            if VALIDATION_OUTPUT=$(aws s3 ls --endpoint-url "${COS_ENDPOINT_INPUT}" "s3://${COS_BUCKET_INPUT}" 2>&1); then
+            if VALIDATION_OUTPUT=$(aws s3 ls --endpoint-url "${COS_ENDPOINT_INPUT}" --no-verify-ssl "s3://${COS_BUCKET_INPUT}" 2>&1); then
                 print_success "COS credentials validated successfully!"
                 print_success "COS credentials configured for this installation session."
             else

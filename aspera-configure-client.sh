@@ -101,13 +101,13 @@ EOF
     fi
 
     # Pass --endpoint-url explicitly: the s3= config block is not honoured by `aws s3 cp/rm`.
-    if aws s3 cp --endpoint-url "${COS_ENDPOINT}" \
+    if aws s3 cp --endpoint-url "${COS_ENDPOINT}" --no-verify-ssl \
             "s3://${COS_BUCKET}/config/aspera-server-config.json" "$CONFIG_FILE"; then
         print_success "Configuration fetched successfully from s3://${COS_BUCKET}/config/aspera-server-config.json!"
 
         # Security cleanup
         print_info "Removing config file from COS for security..."
-        aws s3 rm --endpoint-url "${COS_ENDPOINT}" \
+        aws s3 rm --endpoint-url "${COS_ENDPOINT}" --no-verify-ssl \
             "s3://${COS_BUCKET}/config/aspera-server-config.json" || print_warning "Failed to remove config from COS."
         rm -rf ~/.aws
     else
