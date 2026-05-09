@@ -499,7 +499,10 @@ EOF
     # Set proper ownership and permissions
     chown -R aspera:aspera "${ASPERA_INSTALL_DIR}/etc"
     chmod 755 "${ASPERA_INSTALL_DIR}/etc"
-    chmod 600 "${CONF_FILE}"
+    # Must be world-readable: asperanoded spawns non-root child processes
+    # that need to read this config. Restricting to 600 breaks the daemon
+    # with EACCES at startup.
+    chmod 644 "${CONF_FILE}"
     
     print_success "aspera.conf created successfully"
     print_info "Encryption token: ${TOKEN}"
