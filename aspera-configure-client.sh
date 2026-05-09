@@ -171,12 +171,26 @@ EOF
 
 # Function to validate config file
 validate_config_file() {
+    # If no path was given (and COS fetch didn't set one), look in the
+    # default drop locations: /tmp (where the server's scp instructions
+    # land) and the current directory.
     if [ -z "$CONFIG_FILE" ]; then
-        print_error "Configuration file not provided"
+        for candidate in /tmp/aspera-server-config.json ./aspera-server-config.json; do
+            if [ -f "$candidate" ]; then
+                CONFIG_FILE="$candidate"
+                print_info "Auto-detected configuration file: $CONFIG_FILE"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$CONFIG_FILE" ]; then
+        print_error "Configuration file not provided and none found in /tmp or current directory"
         echo "Usage: $0 <aspera-server-config.json>"
+        echo "Or place the file at /tmp/aspera-server-config.json and rerun without arguments."
         exit 1
     fi
-    
+
     if [ ! -f "$CONFIG_FILE" ]; then
         print_error "Configuration file not found: $CONFIG_FILE"
         exit 1
